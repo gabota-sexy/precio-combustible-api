@@ -163,6 +163,35 @@ def info():
     }
 
 
+@app.get("/localidades", tags=["Catálogo"])
+def localidades(
+    provincia: Optional[str] = Query(default=None, description="Filtrar por provincia"),
+    limit: int = Query(default=5000, ge=1, le=5000),
+):
+    """Devuelve todas las localidades disponibles, opcionalmente filtradas por provincia."""
+    df = obtener_datos(provincia or "", None, limit)
+
+    if df.empty or 'localidad' not in df.columns:
+        return {"total": 0, "localidades": []}
+
+    result = sorted(df['localidad'].dropna().str.strip().str.upper().unique().tolist())
+    return {"total": len(result), "provincia": provincia.upper() if provincia else None, "localidades": result}
+
+
+@app.get("/provincias", tags=["Catálogo"])
+def provincias(
+    limit: int = Query(default=5000, ge=1, le=5000),
+):
+    """Devuelve todas las provincias disponibles en el dataset."""
+    df = obtener_datos("", None, limit)
+
+    if df.empty or 'provincia' not in df.columns:
+        return {"total": 0, "provincias": []}
+
+    result = sorted(df['provincia'].dropna().str.strip().str.upper().unique().tolist())
+    return {"total": len(result), "provincias": result}
+
+
 @app.get("/precios", tags=["Precios"])
 def precios(
     provincia: str = Query(default="BUENOS AIRES", description="Nombre de la provincia"),
