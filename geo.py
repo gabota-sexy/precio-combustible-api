@@ -207,17 +207,31 @@ def resolve_location(
         }
 
     # 2. Sesión cacheada por IP (válida 1 hora)
+    # Solo reutilizamos sesiones GPS — las sesiones IP tienen coordenadas de ciudad
+    # que pueden estar a 40-50km del usuario real (ISPs de GBA apuntan a CABA)
     if ip:
         session = db_get_session(ip)
         if session and session.get("lat") and session.get("lon"):
-            return {
-                "method": "ip_cache",
-                "precision": "aproximada",
-                "lat": session["lat"],
-                "lon": session["lon"],
-                "localidad": session.get("localidad"),
-                "provincia": session.get("provincia"),
-            }
+            source = session.get("source", "")
+            if source in ("gps", "gps_reverse"):
+                return {
+                    "method": "ip_cache",
+                    "precision": "exacta",
+                    "lat": session["lat"],
+                    "lon": session["lon"],
+                    "localidad": session.get("localidad"),
+                    "provincia": session.get("provincia"),
+                }
+            # Sesión IP: solo usamos provincia (no coordenadas imprecisas)
+            elif source == "ip" and session.get("provincia"):
+                return {
+                    "method": "ip_cache",
+                    "precision": "provincia",
+                    "lat": None,
+                    "lon": None,
+                    "localidad": session.get("localidad"),
+                    "provincia": session.get("provincia"),
+                }
 
     # 3. Geolocalización en tiempo real por IP
     if ip:

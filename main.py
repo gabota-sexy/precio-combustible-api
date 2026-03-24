@@ -459,8 +459,12 @@ def precios_smart(
     if distancia_dataset_km is not None:
         location["distancia_dataset_km"] = distancia_dataset_km
 
-    # Si tenemos coordenadas precisas (GPS o IP), buscamos por radio
-    usar_radio = location["method"] in ("gps", "ip_cache", "ip_geo", "localidad")
+    # Radio solo cuando tenemos coordenadas reales (GPS exacto o sesión GPS previa)
+    # IP geo apunta a ciudad del ISP — en GBA eso es CABA aunque el usuario esté en La Reja
+    usar_radio = (
+        location["method"] in ("gps", "localidad") or
+        (location["method"] == "ip_cache" and location.get("precision") == "exacta")
+    ) and resolved_lat is not None and resolved_lon is not None
 
     def _aplicar_radio(df_input, lat_u, lon_u, radio):
         if df_input.empty:
