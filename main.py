@@ -497,7 +497,27 @@ def precios_smart(
                     dedup_cols = [c for c in ['empresa', 'direccion', 'producto'] if c in df_radio.columns]
                     df = pd.concat([df, df_radio]).drop_duplicates(subset=dedup_cols).sort_values('distancia_km')
 
-        # Paso 3: si sigue sin haber nada, ampliar radio x2
+        # Paso 3: si sigue sin haber nada, intentar provincias adyacentes
+        # Muy común: ip-api devuelve "CABA" para IPs de GBA (Buenos Aires provincia)
+        PROVINCIAS_ADYACENTES = {
+            "CABA": ["BUENOS AIRES"],
+            "BUENOS AIRES": ["CABA"],
+        }
+        if df.empty:
+            for prov_adj in PROVINCIAS_ADYACENTES.get(resolved_provincia, []):
+                df_adj = obtener_datos(prov_adj, None, limit)
+                if not df_adj.empty:
+                    if producto:
+                        df_adj = df_adj[df_adj['producto'].str.upper() == producto.upper()]
+                    df_adj = filtrar_por_fecha(df_adj, fecha_desde)
+                    df_adj_radio = _aplicar_radio(df_adj, resolved_lat, resolved_lon, radio_km)
+                    if not df_adj_radio.empty:
+                        df = df_adj_radio
+                        location["provincia_ajustada"] = prov_adj
+                        location["nota"] = f"IP indicaba {resolved_provincia}, resultados encontrados en {prov_adj}"
+                        break
+
+        # Paso 4: si sigue sin haber nada, ampliar radio x2
         if df.empty:
             df_prov = obtener_datos(resolved_provincia, None, limit)
             if not df_prov.empty:
