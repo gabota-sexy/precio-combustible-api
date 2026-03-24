@@ -185,15 +185,24 @@ def resolve_location(
 
     # 1. GPS del dispositivo
     if gps_lat is not None and gps_lon is not None:
+        # Reusar provincia/localidad cacheada de una sesión GPS anterior
+        # (evita llamar a Nominatim en cada request)
+        cached_prov = provincia
+        cached_loc  = localidad
+        if ip and (not cached_prov or not cached_loc):
+            session = db_get_session(ip)
+            if session and session.get("provincia"):
+                cached_prov = cached_prov or session.get("provincia")
+                cached_loc  = cached_loc  or session.get("localidad")
         if ip:
-            db_save_session(ip, gps_lat, gps_lon, localidad, provincia, "gps")
+            db_save_session(ip, gps_lat, gps_lon, cached_loc, cached_prov, "gps")
         return {
             "method": "gps",
             "precision": "exacta",
             "lat": gps_lat,
             "lon": gps_lon,
-            "localidad": localidad,
-            "provincia": provincia,
+            "localidad": cached_loc,
+            "provincia": cached_prov,
         }
 
     # 2. Sesión cacheada por IP (válida 1 hora)

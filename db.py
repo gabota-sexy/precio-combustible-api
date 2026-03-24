@@ -1,4 +1,5 @@
 import sqlite3
+import math
 import os
 from typing import Optional
 from datetime import datetime, timedelta
@@ -136,3 +137,42 @@ def localidades_count() -> int:
     row = conn.execute("SELECT COUNT(*) FROM localidades").fetchone()
     conn.close()
     return row[0] if row else 0
+
+
+def _haversine_simple(lat1, lon1, lat2, lon2) -> float:
+    R = 6371
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi  = math.radians(lat2 - lat1)
+    dlam  = math.radians(lon2 - lon1)
+    a = math.sin(dphi/2)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlam/2)**2
+    return R * 2 * math.asin(math.sqrt(a))
+
+
+def localidad_mas_cercana(lat: float, lon: float, provincia: str = None) -> Optional[dict]:
+    """
+    Devuelve la localidad del dataset (SQLite) más cercana a las coordenadas.
+    Útil cuando Nominatim devuelve un barrio que no existe en el dataset.
+    """
+    conn = _conn()
+    q = "SELECT localidad, provincia, lat, lon FROM localidades WHERE lat IS NOT NULL AND lon IS NOT NULL"
+    params = []
+    if provincia:
+        q += " AND provincia = ?"
+        params.append(provincia.upper().strip())
+    rows = conn.execute(q, params).fetchall()
+    conn.close()
+
+    if not rows:
+        return None
+
+    best, best_dist = None, float('inf')
+    for row in rows:
+        try:
+            d = _haversine_simple(lat, lon, row['lat'], row['lon'])
+        except Exception:
+            continue
+        if d < best_dist:
+            best_dist = d
+            best = {"localidad": row['localidad'], "provincia": row['provincia'],
+                    "lat": row['lat'], "lon": row['lon'], "distancia_km": round(d, 1)}
+    return best

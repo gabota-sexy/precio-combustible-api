@@ -435,6 +435,30 @@ def precios_smart(
 
     resolved_provincia = resolved_provincia or "BUENOS AIRES"
 
+    # ── Localidad del dataset más cercana ────────────────────────────────────
+    # Nominatim/IP puede devolver un barrio (ej: "LA REJA") que no está en el
+    # dataset de energía. Buscamos la localidad registrada más cercana.
+    localidad_detectada = resolved_localidad   # lo que dijo Nominatim/IP
+    localidad_dataset   = resolved_localidad   # lo que realmente usamos para querying
+    distancia_dataset_km = None
+
+    if resolved_lat and resolved_lon:
+        closest = db.localidad_mas_cercana(resolved_lat, resolved_lon, resolved_provincia)
+        if closest:
+            distancia_dataset_km = closest["distancia_km"]
+            # Si la localidad detectada no está en SQLite O está a > 2km, usamos la más cercana
+            en_dataset = db.get_localidad_coords(resolved_localidad or "", resolved_provincia) if resolved_localidad else None
+            if not en_dataset:
+                localidad_dataset = closest["localidad"]
+                if not resolved_localidad:
+                    resolved_localidad = localidad_dataset
+
+    # Enriquecer la respuesta de ubicación con info de localidad
+    location["localidad_detectada"]  = localidad_detectada
+    location["localidad_dataset"]    = localidad_dataset
+    if distancia_dataset_km is not None:
+        location["distancia_dataset_km"] = distancia_dataset_km
+
     # Si tenemos coordenadas precisas (GPS o IP), buscamos por radio
     usar_radio = location["method"] in ("gps", "ip_cache", "ip_geo", "localidad")
 
@@ -450,10 +474,10 @@ def precios_smart(
         )
 
     if usar_radio:
-        # Paso 1: buscar con localidad detectada (más preciso, evita traer todo BA)
+        # Paso 1: buscar con localidad del dataset (más preciso, evita traer todo BA)
         df = pd.DataFrame()
-        if resolved_localidad:
-            df_loc = obtener_datos(resolved_provincia, resolved_localidad, limit)
+        if localidad_dataset:
+            df_loc = obtener_datos(resolved_provincia, localidad_dataset, limit)
             if not df_loc.empty:
                 if producto:
                     df_loc = df_loc[df_loc['producto'].str.upper() == producto.upper()]
