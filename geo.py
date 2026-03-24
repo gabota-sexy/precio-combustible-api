@@ -191,7 +191,8 @@ def resolve_location(
         cached_loc  = localidad
         if ip and (not cached_prov or not cached_loc):
             session = db_get_session(ip)
-            if session and session.get("provincia"):
+            # Solo reutilizar si fue guardado por GPS (no por IP geo, que puede ser ciudad errónea)
+            if session and session.get("provincia") and session.get("source") in ("gps", "gps_reverse"):
                 cached_prov = cached_prov or session.get("provincia")
                 cached_loc  = cached_loc  or session.get("localidad")
         if ip:
