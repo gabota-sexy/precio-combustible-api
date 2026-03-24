@@ -45,10 +45,10 @@ app.add_middleware(
 def _seed_localidades():
     """Descarga localidades únicas del dataset y las guarda en SQLite."""
     try:
+        # Sin 'fields': datos.energia.gob.ar devuelve 409 con ese parámetro
         params = {
             "resource_id": RESOURCE_ID,
-            "limit": 5000,
-            "fields": "localidad,provincia,latitud,longitud,codigo_postal",
+            "limit": 2000,
         }
         headers = {'User-Agent': 'Mozilla/5.0'}
         r = requests.get(API_URL, params=params, headers=headers, timeout=30)
@@ -164,6 +164,14 @@ def obtener_datos(provincia: str, localidad: Optional[str], limit: int) -> pd.Da
         df['longitud'] = pd.to_numeric(df['longitud'], errors='coerce')
     if 'fecha_vigencia' in df.columns:
         df['fecha_vigencia'] = pd.to_datetime(df['fecha_vigencia'], errors='coerce', utc=True).dt.tz_localize(None)
+
+    # Deduplicar: el dataset fuente tiene registros repetidos.
+    # Mantenemos el más reciente por empresa + dirección + producto.
+    dedup_cols = [c for c in ['empresa', 'direccion', 'producto'] if c in df.columns]
+    if dedup_cols and 'fecha_vigencia' in df.columns:
+        df = df.sort_values('fecha_vigencia', ascending=False).drop_duplicates(subset=dedup_cols)
+    elif dedup_cols:
+        df = df.drop_duplicates(subset=dedup_cols)
 
     return df
 
@@ -407,8 +415,25 @@ def precios_smart(
 
     resolved_lat = location["lat"]
     resolved_lon = location["lon"]
-    resolved_provincia = location.get("provincia") or provincia or "BUENOS AIRES"
     resolved_localidad = location.get("localidad") or localidad
+    resolved_provincia = location.get("provincia") or provincia
+
+    # Si tenemos GPS pero no provincia, hacemos reverse geocoding para saber
+    # qué provincia consultar en CKAN (sin esto el pre-filtro no funciona bien)
+    if location["method"] == "gps" and not resolved_provincia:
+        rev = geo.reverse_geocode(resolved_lat, resolved_lon)
+        if rev:
+            resolved_provincia = rev["provincia"]
+            resolved_localidad = resolved_localidad or rev["localidad"]
+            location["provincia"] = resolved_provincia
+            location["localidad"] = resolved_localidad
+            location["geocoded"] = True
+            # Guardar en sesión para futuros requests
+            if client_ip:
+                db.save_session(client_ip, resolved_lat, resolved_lon,
+                                resolved_localidad, resolved_provincia, "gps_reverse")
+
+    resolved_provincia = resolved_provincia or "BUENOS AIRES"
 
     # Si tenemos coordenadas precisas (GPS o IP), buscamos por radio
     usar_radio = location["method"] in ("gps", "ip_cache", "ip_geo", "localidad")

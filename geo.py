@@ -79,6 +79,43 @@ def get_province_capital(provincia: str) -> Optional[dict]:
     return PROVINCE_CAPITALS.get(normalize_provincia(provincia.upper()))
 
 
+def reverse_geocode(lat: float, lon: float) -> Optional[dict]:
+    """
+    Obtiene provincia y localidad a partir de coordenadas GPS usando Nominatim (OSM, gratis).
+    Incluye User-Agent obligatorio según política de Nominatim.
+    """
+    try:
+        r = requests.get(
+            "https://nominatim.openstreetmap.org/reverse",
+            params={"lat": lat, "lon": lon, "format": "json", "accept-language": "es"},
+            headers={"User-Agent": "CombustibleArgentina/2.0 (precio-combustible-api)"},
+            timeout=5,
+        )
+        data = r.json()
+        address = data.get("address", {})
+        # Nominatim devuelve 'state' para provincia en Argentina
+        raw_prov = address.get("state", "")
+        localidad = (
+            address.get("city")
+            or address.get("town")
+            or address.get("village")
+            or address.get("municipality")
+            or ""
+        )
+        provincia = normalize_provincia(raw_prov)
+        if provincia:
+            return {
+                "lat": lat,
+                "lon": lon,
+                "localidad": localidad.upper().strip(),
+                "provincia": provincia,
+                "source": "gps_reverse",
+            }
+    except Exception:
+        pass
+    return None
+
+
 # ─── Geolocalización por IP ───────────────────────────────────────────────────
 
 def geolocate_ip(ip: str) -> Optional[dict]:
