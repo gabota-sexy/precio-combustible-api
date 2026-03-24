@@ -1,13 +1,17 @@
-from fastapi import FastAPI, Query, HTTPException
+from fastapi import FastAPI, Query, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 import requests
 import pandas as pd
 import numpy as np
 import json
 import os
+import threading
 import uvicorn
 from typing import Optional
 from datetime import datetime, date
+
+import db
+import geo
 
 # --- CONFIG ---
 CONFIG_FILE = os.path.join(os.path.dirname(__file__), "config.json")
@@ -23,8 +27,9 @@ RESOURCE_SHOW_URL = "http://datos.energia.gob.ar/api/3/action/resource_show"
 # --- APP ---
 app = FastAPI(
     title="API Precios Combustible Argentina",
-    description="Consulta precios de nafta y diesel en estaciones de servicio de Argentina usando datos de datos.gob.ar",
-    version="1.0.0"
+    description="Consulta precios de combustible en estaciones de Argentina. "
+                "Incluye búsqueda por GPS, IP y zona administrativa.",
+    version="2.0.0"
 )
 
 app.add_middleware(
@@ -34,7 +39,67 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+# --- STARTUP ---
+
+def _seed_localidades():
+    """Descarga localidades únicas del dataset y las guarda en SQLite."""
+    try:
+        params = {
+            "resource_id": RESOURCE_ID,
+            "limit": 5000,
+            "fields": "localidad,provincia,latitud,longitud,codigo_postal",
+        }
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        r = requests.get(API_URL, params=params, headers=headers, timeout=30)
+        r.raise_for_status()
+        data = r.json()
+        if not data.get('success'):
+            return
+
+        records = data.get('result', {}).get('records', [])
+        seen = set()
+        to_insert = []
+        for rec in records:
+            loc = (rec.get('localidad', '') or '').strip().upper()
+            prov = (rec.get('provincia', '') or '').strip().upper()
+            if not loc or not prov:
+                continue
+            key = (loc, prov)
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                lat = float(rec.get('latitud') or 0) or None
+                lon = float(rec.get('longitud') or 0) or None
+            except (ValueError, TypeError):
+                lat = lon = None
+            to_insert.append({
+                "localidad": loc,
+                "provincia": prov,
+                "lat": lat,
+                "lon": lon,
+                "codigo_postal": (rec.get('codigo_postal', '') or '').strip(),
+            })
+
+        if to_insert:
+            db.seed_localidades(to_insert)
+            print(f"[DB] Localidades sembradas: {len(to_insert)}")
+    except Exception as e:
+        print(f"[DB] Error al sembrar localidades: {e}")
+
+
+@app.on_event("startup")
+async def startup():
+    db.init_db()
+    if not db.localidades_seeded():
+        threading.Thread(target=_seed_localidades, daemon=True).start()
+    else:
+        print(f"[DB] Localidades ya cacheadas ({db.localidades_count()} registros)")
+
+
 # --- HELPERS ---
+
 def haversine(lat1, lon1, lat2, lon2):
     if pd.isna(lat1) or pd.isna(lon1) or pd.isna(lat2) or pd.isna(lon2):
         return np.nan
@@ -44,6 +109,14 @@ def haversine(lat1, lon1, lat2, lon2):
     dlambda = np.radians(lon2 - lon1)
     a = np.sin(dphi/2)**2 + np.cos(phi1)*np.cos(phi2)*np.sin(dlambda/2)**2
     return R * 2 * np.arcsin(np.sqrt(a))
+
+
+def get_client_ip(request: Request) -> Optional[str]:
+    """Extrae la IP real del cliente (respeta proxies de Render/Cloudflare)."""
+    forwarded = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else None
 
 
 def obtener_datos(provincia: str, localidad: Optional[str], limit: int) -> pd.DataFrame:
@@ -104,14 +177,9 @@ def filtrar_por_fecha(df: pd.DataFrame, fecha_desde: Optional[date]) -> pd.DataF
 
 def obtener_last_modified() -> Optional[str]:
     try:
-        r = requests.get(
-            RESOURCE_SHOW_URL,
-            params={"id": RESOURCE_ID},
-            timeout=10
-        )
+        r = requests.get(RESOURCE_SHOW_URL, params={"id": RESOURCE_ID}, timeout=10)
         r.raise_for_status()
-        data = r.json()
-        return data.get('result', {}).get('last_modified')
+        return r.json().get('result', {}).get('last_modified')
     except Exception:
         return None
 
@@ -131,9 +199,11 @@ def df_a_lista(df: pd.DataFrame) -> list:
     return result
 
 
-COLS_BASE = ['empresa', 'razon_social', 'bandera', 'tipo_bandera', 'numero_establecimiento',
-             'calle', 'numero', 'direccion', 'localidad', 'provincia', 'codigo_postal',
-             'latitud', 'longitud', 'producto', 'precio', 'fecha_vigencia']
+COLS_BASE = [
+    'empresa', 'razon_social', 'bandera', 'tipo_bandera', 'numero_establecimiento',
+    'calle', 'numero', 'direccion', 'localidad', 'provincia', 'codigo_postal',
+    'latitud', 'longitud', 'producto', 'precio', 'fecha_vigencia'
+]
 
 
 # --- ENDPOINTS ---
@@ -142,127 +212,134 @@ COLS_BASE = ['empresa', 'razon_social', 'bandera', 'tipo_bandera', 'numero_estab
 def root():
     return {
         "nombre": "API Precios Combustible Argentina",
-        "version": "1.0.0",
+        "version": "2.0.0",
         "docs": "/docs",
-        "endpoints": ["/info", "/precios", "/precios/cercanos", "/precios/baratos", "/health"]
+        "endpoints": [
+            "/info", "/health",
+            "/provincias", "/localidades",
+            "/precios", "/precios/cercanos", "/precios/baratos", "/precios/smart"
+        ]
     }
 
 
 @app.get("/health", tags=["Info"])
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "localidades_cacheadas": db.localidades_count()}
 
 
 @app.get("/info", tags=["Info"])
 def info():
-    """Devuelve metadata del dataset: última actualización y fuente."""
-    last_modified = obtener_last_modified()
+    """Metadata del dataset: última actualización y fuente."""
     return {
         "dataset": "Precios en surtidor - Resolución 314/2016",
         "fuente": "datos.energia.gob.ar",
         "resource_id": RESOURCE_ID,
-        "last_modified": last_modified,
+        "last_modified": obtener_last_modified(),
     }
 
 
-@app.get("/localidades", tags=["Catálogo"])
-def localidades(
-    provincia: Optional[str] = Query(default=None, description="Filtrar por provincia"),
-    limit: int = Query(default=5000, ge=1, le=5000),
-):
-    """Devuelve todas las localidades disponibles, opcionalmente filtradas por provincia."""
-    df = obtener_datos(provincia or "", None, limit)
-
-    if df.empty or 'localidad' not in df.columns:
-        return {"total": 0, "localidades": []}
-
-    result = sorted(df['localidad'].dropna().str.strip().str.upper().unique().tolist())
-    return {"total": len(result), "provincia": provincia.upper() if provincia else None, "localidades": result}
-
+# --- CATÁLOGO (desde SQLite) ---
 
 @app.get("/provincias", tags=["Catálogo"])
 def provincias():
-    """Devuelve todas las provincias disponibles en el dataset."""
+    """Lista de provincias disponibles (desde caché SQLite)."""
+    prov_list = db.query_provincias()
+    if prov_list:
+        return {"total": len(prov_list), "fuente": "cache", "provincias": prov_list}
+
+    # Fallback: API externa con solo el campo provincia
     try:
-        # Solo pedimos el campo 'provincia' para que la respuesta sea liviana
-        params = {
-            "resource_id": RESOURCE_ID,
-            "limit": 5000,
-            "fields": "provincia",
-        }
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        r = requests.get(API_URL, params=params, headers=headers, timeout=API_CONFIG['timeout'])
+        params = {"resource_id": RESOURCE_ID, "limit": 5000, "fields": "provincia"}
+        r = requests.get(API_URL, params=params,
+                         headers={'User-Agent': 'Mozilla/5.0'}, timeout=API_CONFIG['timeout'])
         r.raise_for_status()
         data = r.json()
         if not data.get('success'):
             raise HTTPException(status_code=502, detail="Error de API externa")
         records = data.get('result', {}).get('records', [])
-        provincias_set = sorted(set(
-            rec['provincia'].strip().upper()
-            for rec in records
-            if rec.get('provincia')
+        result = sorted(set(
+            rec['provincia'].strip().upper() for rec in records if rec.get('provincia')
         ))
-        return {"total": len(provincias_set), "provincias": provincias_set}
+        return {"total": len(result), "fuente": "api", "provincias": result}
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Error al obtener provincias: {str(e)}")
+        raise HTTPException(status_code=502, detail=str(e))
 
+
+@app.get("/localidades", tags=["Catálogo"])
+def localidades(
+    provincia: Optional[str] = Query(default=None, description="Filtrar por provincia"),
+):
+    """Lista localidades con coordenadas y código postal (desde caché SQLite)."""
+    rows = db.query_localidades(provincia)
+    if rows:
+        return {
+            "total": len(rows),
+            "fuente": "cache",
+            "provincia": provincia.upper() if provincia else None,
+            "localidades": rows
+        }
+
+    # Fallback: API externa
+    df = obtener_datos(provincia or "", None, 5000)
+    if df.empty or 'localidad' not in df.columns:
+        return {"total": 0, "localidades": []}
+    result = sorted(df['localidad'].dropna().str.strip().str.upper().unique().tolist())
+    return {
+        "total": len(result),
+        "fuente": "api",
+        "provincia": provincia.upper() if provincia else None,
+        "localidades": [{"localidad": l, "provincia": provincia.upper() if provincia else None} for l in result]
+    }
+
+
+# --- PRECIOS ---
 
 @app.get("/precios", tags=["Precios"])
 def precios(
-    provincia: str = Query(default="BUENOS AIRES", description="Nombre de la provincia"),
-    localidad: Optional[str] = Query(default=None, description="Nombre de la localidad"),
-    producto: Optional[str] = Query(default=None, description="Tipo de combustible (ej: Nafta 95, Diesel, GNC)"),
-    fecha_desde: Optional[date] = Query(default=None, description="Filtrar por fecha_vigencia >= esta fecha (YYYY-MM-DD)"),
-    limit: int = Query(default=1000, ge=1, le=5000, description="Máximo de registros a traer de la API"),
+    provincia: str = Query(default="BUENOS AIRES"),
+    localidad: Optional[str] = Query(default=None),
+    producto: Optional[str] = Query(default=None),
+    fecha_desde: Optional[date] = Query(default=None),
+    limit: int = Query(default=1000, ge=1, le=5000),
 ):
-    """Devuelve estaciones filtradas por provincia, localidad, producto y fecha. Ordenadas por precio."""
+    """Estaciones filtradas por zona. Ordenadas por precio."""
     df = obtener_datos(provincia, localidad, limit)
-
     if df.empty:
         return {"total": 0, "estaciones": []}
-
     if producto:
         df = df[df['producto'].str.upper() == producto.upper()]
-
     df = filtrar_por_fecha(df, fecha_desde)
-
     if 'precio' in df.columns:
         df = df.sort_values('precio')
-
     cols = [c for c in COLS_BASE if c in df.columns]
     return {"total": len(df), "estaciones": df_a_lista(df[cols])}
 
 
 @app.get("/precios/cercanos", tags=["Precios"])
 def precios_cercanos(
-    lat: float = Query(..., description="Latitud del usuario"),
-    lon: float = Query(..., description="Longitud del usuario"),
-    radio_km: float = Query(default=5.0, description="Radio de búsqueda en km"),
-    provincia: str = Query(default="BUENOS AIRES", description="Provincia para pre-filtrar"),
-    localidad: Optional[str] = Query(default=None, description="Localidad para pre-filtrar"),
-    producto: Optional[str] = Query(default=None, description="Tipo de combustible"),
-    fecha_desde: Optional[date] = Query(default=None, description="Filtrar por fecha_vigencia >= esta fecha (YYYY-MM-DD)"),
+    lat: float = Query(...),
+    lon: float = Query(...),
+    radio_km: float = Query(default=5.0),
+    provincia: str = Query(default="BUENOS AIRES"),
+    localidad: Optional[str] = Query(default=None),
+    producto: Optional[str] = Query(default=None),
+    fecha_desde: Optional[date] = Query(default=None),
     limit: int = Query(default=1000, ge=1, le=5000),
 ):
-    """Devuelve estaciones dentro del radio GPS indicado, ordenadas por distancia."""
+    """Estaciones dentro del radio GPS, ordenadas por distancia."""
     df = obtener_datos(provincia, localidad, limit)
-
     if df.empty:
         return {"total": 0, "estaciones": []}
-
     if producto:
         df = df[df['producto'].str.upper() == producto.upper()]
-
     df = filtrar_por_fecha(df, fecha_desde)
-
     df['distancia_km'] = df.apply(
         lambda x: haversine(lat, lon, x.get('latitud'), x.get('longitud')), axis=1
     )
     df = df[df['distancia_km'] <= radio_km].sort_values('distancia_km')
     df['distancia_km'] = df['distancia_km'].round(2)
-
     cols = [c for c in COLS_BASE + ['distancia_km'] if c in df.columns]
     return {"total": len(df), "radio_km": radio_km, "estaciones": df_a_lista(df[cols])}
 
@@ -271,27 +348,117 @@ def precios_cercanos(
 def precios_baratos(
     provincia: str = Query(default="BUENOS AIRES"),
     localidad: Optional[str] = Query(default=None),
-    producto: Optional[str] = Query(default=None, description="Tipo de combustible (ej: Nafta 95)"),
-    fecha_desde: Optional[date] = Query(default=None, description="Filtrar por fecha_vigencia >= esta fecha (YYYY-MM-DD)"),
-    top: int = Query(default=10, ge=1, le=100, description="Cuántos resultados devolver"),
+    producto: Optional[str] = Query(default=None),
+    fecha_desde: Optional[date] = Query(default=None),
+    top: int = Query(default=10, ge=1, le=100),
     limit: int = Query(default=1000, ge=1, le=5000),
 ):
-    """Devuelve las N estaciones más baratas para un producto y zona."""
+    """Las N estaciones más baratas para un producto y zona."""
     df = obtener_datos(provincia, localidad, limit)
-
     if df.empty:
         return {"total": 0, "estaciones": []}
-
     if producto:
         df = df[df['producto'].str.upper() == producto.upper()]
-
     df = filtrar_por_fecha(df, fecha_desde)
-
     if 'precio' in df.columns:
         df = df.dropna(subset=['precio']).sort_values('precio').head(top)
-
     cols = [c for c in COLS_BASE if c in df.columns]
     return {"total": len(df), "estaciones": df_a_lista(df[cols])}
+
+
+@app.get("/precios/smart", tags=["Precios"])
+def precios_smart(
+    request: Request,
+    # GPS (máxima precisión)
+    lat: Optional[float] = Query(default=None, description="Latitud GPS del usuario"),
+    lon: Optional[float] = Query(default=None, description="Longitud GPS del usuario"),
+    # Zona administrativa (fallback manual)
+    provincia: Optional[str] = Query(default=None),
+    localidad: Optional[str] = Query(default=None),
+    # Filtros de combustible
+    producto: Optional[str] = Query(default=None),
+    fecha_desde: Optional[date] = Query(default=None),
+    radio_km: float = Query(default=10.0, description="Radio de búsqueda cuando se usan coordenadas"),
+    limit: int = Query(default=500, ge=1, le=5000),
+):
+    """
+    Endpoint inteligente con resolución automática de ubicación.
+
+    Cascada de precisión:
+    1. GPS exacto del dispositivo
+    2. Caché de sesión por IP (última ubicación conocida, válida 1h)
+    3. Geolocalización por IP en tiempo real
+    4. Coordenadas de la localidad desde base de datos local
+    5. Capital de la provincia como fallback
+    6. Buenos Aires por defecto
+    """
+    client_ip = get_client_ip(request)
+
+    location = geo.resolve_location(
+        gps_lat=lat,
+        gps_lon=lon,
+        ip=client_ip,
+        localidad=localidad,
+        provincia=provincia,
+        db_get_session=db.get_session,
+        db_save_session=db.save_session,
+        db_get_localidad_coords=db.get_localidad_coords,
+    )
+
+    resolved_lat = location["lat"]
+    resolved_lon = location["lon"]
+    resolved_provincia = location.get("provincia") or provincia or "BUENOS AIRES"
+    resolved_localidad = location.get("localidad") or localidad
+
+    # Si tenemos coordenadas precisas (GPS o IP), buscamos por radio
+    usar_radio = location["method"] in ("gps", "ip_cache", "ip_geo", "localidad")
+
+    if usar_radio:
+        df = obtener_datos(resolved_provincia, None, limit)
+        if not df.empty:
+            if producto:
+                df = df[df['producto'].str.upper() == producto.upper()]
+            df = filtrar_por_fecha(df, fecha_desde)
+            df['distancia_km'] = df.apply(
+                lambda x: haversine(resolved_lat, resolved_lon, x.get('latitud'), x.get('longitud')), axis=1
+            )
+            df = df[df['distancia_km'] <= radio_km].sort_values('distancia_km')
+            df['distancia_km'] = df['distancia_km'].round(2)
+
+            # Si no hay resultados en el radio, ampliamos x2
+            if df.empty:
+                df_full = obtener_datos(resolved_provincia, None, limit)
+                if producto:
+                    df_full = df_full[df_full['producto'].str.upper() == producto.upper()]
+                df_full = filtrar_por_fecha(df_full, fecha_desde)
+                df_full['distancia_km'] = df_full.apply(
+                    lambda x: haversine(resolved_lat, resolved_lon, x.get('latitud'), x.get('longitud')), axis=1
+                )
+                df = df_full[df_full['distancia_km'] <= radio_km * 2].sort_values('distancia_km')
+                df['distancia_km'] = df['distancia_km'].round(2)
+    else:
+        # Fallback por zona administrativa
+        df = obtener_datos(resolved_provincia, resolved_localidad, limit)
+        if not df.empty:
+            if producto:
+                df = df[df['producto'].str.upper() == producto.upper()]
+            df = filtrar_por_fecha(df, fecha_desde)
+            if 'precio' in df.columns:
+                df = df.sort_values('precio')
+
+    if df.empty:
+        return {
+            "ubicacion_resuelta": location,
+            "total": 0,
+            "estaciones": []
+        }
+
+    cols = [c for c in COLS_BASE + ['distancia_km'] if c in df.columns]
+    return {
+        "ubicacion_resuelta": location,
+        "total": len(df),
+        "estaciones": df_a_lista(df[cols])
+    }
 
 
 if __name__ == "__main__":
