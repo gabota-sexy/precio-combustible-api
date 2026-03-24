@@ -90,7 +90,7 @@ def obtener_datos(provincia: str, localidad: Optional[str], limit: int) -> pd.Da
     if 'longitud' in df.columns:
         df['longitud'] = pd.to_numeric(df['longitud'], errors='coerce')
     if 'fecha_vigencia' in df.columns:
-        df['fecha_vigencia'] = pd.to_datetime(df['fecha_vigencia'], errors='coerce')
+        df['fecha_vigencia'] = pd.to_datetime(df['fecha_vigencia'], errors='coerce', utc=True).dt.tz_localize(None)
 
     return df
 
@@ -179,17 +179,32 @@ def localidades(
 
 
 @app.get("/provincias", tags=["Catálogo"])
-def provincias(
-    limit: int = Query(default=5000, ge=1, le=5000),
-):
+def provincias():
     """Devuelve todas las provincias disponibles en el dataset."""
-    df = obtener_datos("", None, limit)
-
-    if df.empty or 'provincia' not in df.columns:
-        return {"total": 0, "provincias": []}
-
-    result = sorted(df['provincia'].dropna().str.strip().str.upper().unique().tolist())
-    return {"total": len(result), "provincias": result}
+    try:
+        # Solo pedimos el campo 'provincia' para que la respuesta sea liviana
+        params = {
+            "resource_id": RESOURCE_ID,
+            "limit": 5000,
+            "fields": "provincia",
+        }
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        r = requests.get(API_URL, params=params, headers=headers, timeout=API_CONFIG['timeout'])
+        r.raise_for_status()
+        data = r.json()
+        if not data.get('success'):
+            raise HTTPException(status_code=502, detail="Error de API externa")
+        records = data.get('result', {}).get('records', [])
+        provincias_set = sorted(set(
+            rec['provincia'].strip().upper()
+            for rec in records
+            if rec.get('provincia')
+        ))
+        return {"total": len(provincias_set), "provincias": provincias_set}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Error al obtener provincias: {str(e)}")
 
 
 @app.get("/precios", tags=["Precios"])
