@@ -205,6 +205,10 @@ def obtener_datos(provincia: str, localidad: Optional[str], limit: int) -> pd.Da
     if 'provincia' in df.columns:
         df['provincia'] = df['provincia'].replace("CAPITAL FEDERAL", "CABA")
 
+    # Renombrar empresabandera → bandera (nombre legible para el frontend: YPF, Shell, Axion…)
+    if 'empresabandera' in df.columns:
+        df = df.rename(columns={'empresabandera': 'bandera'})
+
     return df
 
 
@@ -240,9 +244,23 @@ def df_a_lista(df: pd.DataFrame) -> list:
 
 
 COLS_BASE = [
-    'empresa', 'razon_social', 'bandera', 'tipo_bandera', 'numero_establecimiento',
-    'calle', 'numero', 'direccion', 'localidad', 'provincia', 'codigo_postal',
-    'latitud', 'longitud', 'producto', 'precio', 'fecha_vigencia'
+    # Identidad del establecimiento
+    'empresa',       # Razón social legal (ej: "ALISO SRL")
+    'bandera',       # Marca comercial (ej: "YPF", "Shell", "Axion", "PUMA") — renombrado de empresabandera
+    'cuit',          # CUIT de la empresa
+    # Dirección
+    'direccion',     # Dirección completa
+    'localidad',
+    'provincia',
+    'region',        # Región geográfica (PAMPEANA, PATAGONICA, NOA, NEA, CUYO)
+    # Coordenadas
+    'latitud',
+    'longitud',
+    # Precio
+    'producto',
+    'precio',
+    'tipohorario',   # "Diurno" / "Nocturno"
+    'fecha_vigencia',
 ]
 
 
@@ -311,14 +329,16 @@ def provincias():
 def localidades(
     provincia: Optional[str] = Query(default=None, description="Filtrar por provincia"),
 ):
-    """Lista localidades con coordenadas y código postal (desde caché SQLite)."""
+    """Lista localidades con coordenadas (desde caché DynamoDB/SQLite)."""
     rows = db.query_localidades(provincia)
     if rows:
+        # codigo_postal no existe en el dataset CKAN — omitir del response
+        clean = [{k: v for k, v in r.items() if k != 'codigo_postal'} for r in rows]
         return {
-            "total": len(rows),
+            "total": len(clean),
             "fuente": "cache",
             "provincia": provincia.upper() if provincia else None,
-            "localidades": rows
+            "localidades": clean
         }
 
     # Fallback: API externa
