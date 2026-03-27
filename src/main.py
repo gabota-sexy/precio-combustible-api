@@ -146,9 +146,38 @@ def get_client_ip(request: Request) -> Optional[str]:
     return request.client.host if request.client else None
 
 
+def _records_to_df(records: list) -> pd.DataFrame:
+    """Convierte lista de dicts (DynamoDB cache) al mismo DataFrame que devuelve CKAN."""
+    if not records:
+        return pd.DataFrame()
+    df = pd.DataFrame(records)
+    # Renombrar latitud/longitud si vienen como lat/lon (no aplica aquí, pero por robustez)
+    if 'precio' in df.columns:
+        df['precio'] = pd.to_numeric(df['precio'], errors='coerce')
+    if 'latitud' in df.columns:
+        df['latitud'] = pd.to_numeric(df['latitud'], errors='coerce')
+    if 'longitud' in df.columns:
+        df['longitud'] = pd.to_numeric(df['longitud'], errors='coerce')
+    if 'fecha_vigencia' in df.columns:
+        df['fecha_vigencia'] = pd.to_datetime(df['fecha_vigencia'], errors='coerce', utc=True).dt.tz_localize(None)
+    if 'provincia' in df.columns:
+        df['provincia'] = df['provincia'].replace("CAPITAL FEDERAL", "CABA")
+    if 'empresabandera' in df.columns:
+        df = df.rename(columns={'empresabandera': 'bandera'})
+    return df
+
+
 def obtener_datos(provincia: str, localidad: Optional[str], limit: int) -> pd.DataFrame:
     if API_CONFIG.get('usar_datos_locales'):
         return pd.DataFrame(DATOS_LOCALES_CONFIG['estaciones'])
+
+    # ── DynamoDB cache (solo cuando hay provincia+localidad explícitos) ──────
+    if os.environ.get("DB_BACKEND") == "dynamo" and provincia and localidad:
+        cached = db.get_estaciones(provincia, localidad)
+        if cached:
+            print(f"[CACHE] HIT {provincia}#{localidad} — {len(cached)} registros")
+            return _records_to_df(cached)
+        print(f"[CACHE] MISS {provincia}#{localidad} — consultando CKAN")
 
     filtros = {}
     if provincia:
@@ -435,6 +464,7 @@ def precios_smart(
     # Zona administrativa (fallback manual)
     provincia: Optional[str] = Query(default=None),
     localidad: Optional[str] = Query(default=None),
+    barrio: Optional[str] = Query(default=None, description="Barrio (especialmente útil en CABA). Se geocodifica a coordenadas automáticamente."),
     # Filtros de combustible
     producto: Optional[str] = Query(default=None),
     fecha_desde: Optional[date] = Query(default=None),
@@ -451,8 +481,44 @@ def precios_smart(
     4. Coordenadas de la localidad desde base de datos local
     5. Capital de la provincia como fallback
     6. Buenos Aires por defecto
+
+    Para CABA: usar `barrio` (ej: Palermo, Belgrano) o `lat`/`lon`.
+    Buscar solo por provincia=CABA sin GPS ni barrio no funciona —
+    el dataset no distingue barrios, todas las estaciones están bajo
+    localidad=CAPITAL FEDERAL.
     """
     client_ip = get_client_ip(request)
+
+    # Si viene barrio, geocodificarlo a coordenadas via Nominatim
+    # Esto es necesario especialmente para CABA donde localidad=CAPITAL FEDERAL
+    if barrio and lat is None and lon is None:
+        prov_query = provincia or "Argentina"
+        nominatim_url = "https://nominatim.openstreetmap.org/search"
+        try:
+            r_nom = requests.get(
+                nominatim_url,
+                params={"q": f"{barrio}, {prov_query}, Argentina", "format": "json", "limit": 1},
+                headers={"User-Agent": "CombustibleArgentina/1.0"},
+                timeout=5,
+            )
+            results = r_nom.json()
+            if results:
+                lat = float(results[0]["lat"])
+                lon = float(results[0]["lon"])
+        except Exception:
+            pass  # Si falla nominatim, seguir con la cascada normal
+
+    # CABA sin GPS ni barrio → error claro en vez de timeout
+    prov_upper = (provincia or "").upper()
+    if prov_upper in ("CABA", "CAPITAL FEDERAL") and lat is None and lon is None and not barrio:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Para buscar en CABA necesitás especificar barrio o coordenadas GPS.",
+                "ejemplo": "/precios/smart?provincia=CABA&barrio=Palermo&radio_km=3",
+                "barrios_ejemplo": ["Palermo", "Belgrano", "Recoleta", "Villa Crespo", "Caballito", "Flores"]
+            }
+        )
 
     location = geo.resolve_location(
         gps_lat=lat,
@@ -498,18 +564,26 @@ def precios_smart(
         closest = db.localidad_mas_cercana(resolved_lat, resolved_lon, resolved_provincia)
         if closest:
             distancia_dataset_km = closest["distancia_km"]
-            # Si la localidad detectada no está en SQLite O está a > 2km, usamos la más cercana
-            en_dataset = db.get_localidad_coords(resolved_localidad or "", resolved_provincia) if resolved_localidad else None
-            if not en_dataset:
-                localidad_dataset = closest["localidad"]
-                if not resolved_localidad:
-                    resolved_localidad = localidad_dataset
+            # Siempre usamos la localidad más cercana a las coordenadas ACTUALES para
+            # la query CKAN. No usamos la localidad cacheada en sesión porque puede
+            # ser de una posición anterior (misma IP, distinta ubicación GPS).
+            localidad_dataset = closest["localidad"]
+            if not resolved_localidad:
+                resolved_localidad = localidad_dataset
 
     # Enriquecer la respuesta de ubicación con info de localidad
     location["localidad_detectada"]  = localidad_detectada
     location["localidad_dataset"]    = localidad_dataset
     if distancia_dataset_km is not None:
         location["distancia_dataset_km"] = distancia_dataset_km
+
+    # Flag explícito para el frontend: ¿la ubicación es confiable?
+    # IP geo apunta al nodo del ISP — en GBA puede estar 30-50km lejos del usuario.
+    location["ubicacion_aproximada"] = location["method"] in ("ip_geo",) or (
+        location["method"] == "ip_cache" and location.get("precision") != "exacta"
+    )
+    if location["ubicacion_aproximada"]:
+        location["sugerencia"] = "Activá el GPS para ver estaciones cerca tuyo"
 
     # Radio solo cuando tenemos coordenadas reales (GPS exacto o sesión GPS previa)
     # IP geo apunta a ciudad del ISP — en GBA eso es CABA aunque el usuario esté en La Reja
@@ -584,16 +658,17 @@ def precios_smart(
                 if not df.empty:
                     location["radio_ampliado"] = True
 
-        # Aplicar fecha_desde al final — graceful degradation:
-        # si filtrar por fecha vacía el resultado, mostramos igual sin filtro de fecha
-        if fecha_desde and not df.empty:
-            df_fecha = filtrar_por_fecha(df, fecha_desde)
-            if not df_fecha.empty:
-                df = df_fecha
-            else:
+        # Aplicar filtro de fecha estricto: solo devolver estaciones con precio vigente.
+        # Si no hay ninguna → devolver vacío con advertencia (sin graceful degradation).
+        if fecha_desde and not df.empty and 'fecha_vigencia' in df.columns:
+            cutoff = pd.Timestamp(fecha_desde)
+            df = df.copy()
+            df['precio_vigente'] = df['fecha_vigencia'] >= cutoff
+            df = df[df['precio_vigente']]
+            if df.empty:
                 location["advertencia_fecha"] = (
-                    f"No hay precios actualizados desde {fecha_desde} en el radio. "
-                    "Se muestran los últimos precios disponibles."
+                    f"No hay precios actualizados desde {fecha_desde} "
+                    f"en el radio de {radio_km}km."
                 )
     else:
         # Fallback por zona administrativa
@@ -601,7 +676,15 @@ def precios_smart(
         if not df.empty:
             if producto:
                 df = df[df['producto'].str.upper() == producto.upper()]
-            df = filtrar_por_fecha(df, fecha_desde)
+            if fecha_desde and 'fecha_vigencia' in df.columns:
+                cutoff = pd.Timestamp(fecha_desde)
+                df = df.copy()
+                df['precio_vigente'] = df['fecha_vigencia'] >= cutoff
+                df = df[df['precio_vigente']]
+                if df.empty:
+                    location["advertencia_fecha"] = (
+                        f"No hay precios actualizados desde {fecha_desde} en esta zona."
+                    )
             if 'precio' in df.columns:
                 df = df.sort_values('precio')
 
@@ -612,11 +695,213 @@ def precios_smart(
             "estaciones": []
         }
 
-    cols = [c for c in COLS_BASE + ['distancia_km'] if c in df.columns]
+    cols = [c for c in COLS_BASE + ['distancia_km', 'precio_vigente'] if c in df.columns]
     return {
         "ubicacion_resuelta": location,
         "total": len(df),
         "estaciones": df_a_lista(df[cols])
+    }
+
+
+@app.get("/precios/estadisticas", tags=["Precios"])
+def precios_estadisticas(
+    provincia: str = Query(default="BUENOS AIRES"),
+    localidad: Optional[str] = Query(default=None),
+    producto: Optional[str] = Query(default=None, description="Filtrar por producto específico"),
+    lat: Optional[float] = Query(default=None, description="Latitud para radio"),
+    lon: Optional[float] = Query(default=None, description="Longitud para radio"),
+    radio_km: float = Query(default=15.0),
+    limit: int = Query(default=2000, ge=1, le=5000),
+):
+    """
+    Estadísticas de precios para una zona: promedio, mínimo, máximo, mediana.
+    Agrupa por producto y por bandera. Usa solo precios con fecha_vigencia reciente (últimos 12 meses).
+    """
+    df = obtener_datos(provincia, localidad, limit)
+    if df.empty:
+        return {"total_registros": 0, "provincia": provincia, "localidad": localidad, "por_producto": []}
+
+    # Filtrar por radio si hay coordenadas
+    if lat is not None and lon is not None:
+        df = df.copy()
+        df['_dist'] = df.apply(lambda x: haversine(lat, lon, x.get('latitud'), x.get('longitud')), axis=1)
+        df = df[df['_dist'] <= radio_km]
+
+    if producto:
+        df = df[df['producto'].str.upper() == producto.upper()]
+
+    if df.empty:
+        return {"total_registros": 0, "provincia": provincia, "localidad": localidad, "por_producto": []}
+
+    # Solo precios con fecha_vigencia en los últimos 12 meses
+    if 'fecha_vigencia' in df.columns:
+        cutoff_12m = pd.Timestamp.now() - pd.DateOffset(months=12)
+        df_reciente = df[df['fecha_vigencia'] >= cutoff_12m]
+        # Si no hay nada reciente, usar todos (y avisar)
+        usar_todos = df_reciente.empty
+        df_stats = df if usar_todos else df_reciente
+    else:
+        usar_todos = True
+        df_stats = df
+
+    ultima_actualizacion = None
+    if 'fecha_vigencia' in df_stats.columns:
+        max_fecha = df_stats['fecha_vigencia'].max()
+        if not pd.isna(max_fecha):
+            ultima_actualizacion = max_fecha.date().isoformat()
+
+    # Agrupar por producto
+    por_producto = []
+    productos_iter = df_stats['producto'].dropna().unique() if 'producto' in df_stats.columns else []
+
+    for prod in sorted(productos_iter):
+        df_prod = df_stats[df_stats['producto'] == prod]
+        precios = df_prod['precio'].dropna() if 'precio' in df_prod.columns else pd.Series(dtype=float)
+        if precios.empty:
+            continue
+
+        # Por bandera
+        por_bandera = []
+        if 'bandera' in df_prod.columns:
+            for bandera, grp in df_prod.groupby('bandera'):
+                p = grp['precio'].dropna()
+                if p.empty:
+                    continue
+                por_bandera.append({
+                    "bandera": bandera,
+                    "count": len(grp),
+                    "precio_min": round(float(p.min()), 2),
+                    "precio_max": round(float(p.max()), 2),
+                    "precio_promedio": round(float(p.mean()), 2),
+                })
+            por_bandera.sort(key=lambda x: x['precio_promedio'])
+
+        por_producto.append({
+            "producto": prod,
+            "count_estaciones": int(df_prod['empresa'].nunique()) if 'empresa' in df_prod.columns else len(df_prod),
+            "count_precios": len(precios),
+            "precio_min": round(float(precios.min()), 2),
+            "precio_max": round(float(precios.max()), 2),
+            "precio_promedio": round(float(precios.mean()), 2),
+            "precio_mediana": round(float(precios.median()), 2),
+            "por_bandera": por_bandera,
+        })
+
+    return {
+        "provincia": provincia.upper(),
+        "localidad": localidad.upper() if localidad else None,
+        "radio_km": radio_km if (lat is not None and lon is not None) else None,
+        "total_registros": len(df_stats),
+        "ultima_actualizacion": ultima_actualizacion,
+        "nota_cobertura": "precios de todos los períodos" if usar_todos else "precios de los últimos 12 meses",
+        "por_producto": por_producto,
+    }
+
+
+@app.get("/precios/timeline", tags=["Precios"])
+def precios_timeline(
+    provincia: str = Query(default="BUENOS AIRES"),
+    localidad: Optional[str] = Query(default=None),
+    producto: str = Query(..., description="Ej: Nafta (súper) entre 92 y 95 Ron"),
+    bandera: Optional[str] = Query(default=None, description="Filtrar por bandera: YPF, SHELL C.A.P.S.A., AXION, etc."),
+    fecha_desde: Optional[date] = Query(default=None, description="YYYY-MM-DD"),
+    fecha_hasta: Optional[date] = Query(default=None, description="YYYY-MM-DD"),
+    limit: int = Query(default=2000, ge=1, le=5000),
+):
+    """
+    Timeline de precios: evolución histórica agrupada por fecha de vigencia.
+
+    Cada punto representa una fecha en que las estaciones de la zona
+    reportaron un nuevo precio. Útil para graficar tendencia de precios.
+
+    Nota: los datos provienen de fecha_vigencia del dataset CKAN — no es
+    un precio diario continuo sino eventos de actualización por estación.
+    """
+    # Traer datos SIN dedup para tener todos los registros históricos
+    filtros = {}
+    if provincia:
+        prov_upper = provincia.upper()
+        filtros["provincia"] = CKAN_PROV_MAP.get(prov_upper, prov_upper)
+    if localidad:
+        filtros["localidad"] = localidad.upper()
+    filtros["producto"] = producto
+
+    params = {
+        "resource_id": RESOURCE_ID,
+        "limit": limit,
+        "filters": json.dumps(filtros)
+    }
+    try:
+        r = requests.get(API_URL, params=params,
+                         headers={'User-Agent': 'Mozilla/5.0'},
+                         timeout=API_CONFIG['timeout'])
+        r.raise_for_status()
+        data = r.json()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+    records = data.get('result', {}).get('records', [])
+    if not records:
+        return {"producto": producto, "provincia": provincia, "localidad": localidad, "total_puntos": 0, "timeline": []}
+
+    df = pd.DataFrame(records)
+    df['precio'] = pd.to_numeric(df['precio'].astype(str).str.replace(',', '.'), errors='coerce')
+    df['fecha_vigencia'] = pd.to_datetime(df['fecha_vigencia'], errors='coerce', utc=True).dt.tz_localize(None)
+
+    # Normalizar bandera
+    if 'empresabandera' in df.columns:
+        df = df.rename(columns={'empresabandera': 'bandera'})
+    if 'provincia' in df.columns:
+        df['provincia'] = df['provincia'].replace("CAPITAL FEDERAL", "CABA")
+
+    # Filtrar por bandera si se especificó
+    if bandera and 'bandera' in df.columns:
+        df = df[df['bandera'].str.upper() == bandera.upper()]
+
+    # Filtrar por rango de fechas
+    if fecha_desde:
+        df = df[df['fecha_vigencia'] >= pd.Timestamp(fecha_desde)]
+    if fecha_hasta:
+        df = df[df['fecha_vigencia'] <= pd.Timestamp(fecha_hasta)]
+
+    df = df.dropna(subset=['fecha_vigencia', 'precio'])
+
+    if df.empty:
+        return {"producto": producto, "provincia": provincia, "localidad": localidad, "total_puntos": 0, "timeline": []}
+
+    # Agrupar por fecha (día)
+    df['fecha'] = df['fecha_vigencia'].dt.date
+    grouped = df.groupby('fecha').agg(
+        precio_min=('precio', 'min'),
+        precio_max=('precio', 'max'),
+        precio_promedio=('precio', 'mean'),
+        precio_mediana=('precio', 'median'),
+        cantidad_estaciones=('empresa', 'nunique' if 'empresa' in df.columns else 'count'),
+    ).reset_index().sort_values('fecha')
+
+    timeline = []
+    for _, row in grouped.iterrows():
+        timeline.append({
+            "fecha": row['fecha'].isoformat(),
+            "precio_min": round(float(row['precio_min']), 2),
+            "precio_max": round(float(row['precio_max']), 2),
+            "precio_promedio": round(float(row['precio_promedio']), 2),
+            "precio_mediana": round(float(row['precio_mediana']), 2),
+            "cantidad_estaciones": int(row['cantidad_estaciones']),
+        })
+
+    return {
+        "producto": producto,
+        "provincia": provincia.upper(),
+        "localidad": localidad.upper() if localidad else None,
+        "bandera": bandera.upper() if bandera else None,
+        "total_puntos": len(timeline),
+        "precio_actual": timeline[-1]['precio_promedio'] if timeline else None,
+        "precio_inicial": timeline[0]['precio_promedio'] if timeline else None,
+        "variacion_pct": round(
+            ((timeline[-1]['precio_promedio'] - timeline[0]['precio_promedio']) / timeline[0]['precio_promedio']) * 100, 2
+        ) if len(timeline) >= 2 and timeline[0]['precio_promedio'] else None,
+        "timeline": timeline,
     }
 
 

@@ -211,15 +211,37 @@ def resolve_location(
     # 1. GPS del dispositivo
     if gps_lat is not None and gps_lon is not None:
         # Reusar provincia/localidad cacheada de una sesión GPS anterior
-        # (evita llamar a Nominatim en cada request)
+        # SOLO si las coordenadas no cambiaron significativamente (< 20km).
+        # Si el usuario se movió a otra zona, descartamos la sesión y dejamos
+        # que main.py haga reverse geocoding con las nuevas coords.
         cached_prov = provincia
         cached_loc  = localidad
+        session = None
         if ip and (not cached_prov or not cached_loc):
             session = db_get_session(ip)
-            # Solo reutilizar si fue guardado por GPS (no por IP geo, que puede ser ciudad errónea)
             if session and session.get("provincia") and session.get("source") in ("gps", "gps_reverse"):
-                cached_prov = cached_prov or session.get("provincia")
-                cached_loc  = cached_loc  or session.get("localidad")
+                # Verificar que las coordenadas actuales están cerca de las cacheadas
+                sess_lat = session.get("lat")
+                sess_lon = session.get("lon")
+                session_valida = False
+                if sess_lat is not None and sess_lon is not None:
+                    try:
+                        import math
+                        dlat = math.radians(float(gps_lat) - float(sess_lat))
+                        dlon = math.radians(float(gps_lon) - float(sess_lon))
+                        a = (math.sin(dlat/2)**2 +
+                             math.cos(math.radians(float(sess_lat))) *
+                             math.cos(math.radians(float(gps_lat))) *
+                             math.sin(dlon/2)**2)
+                        dist_km = 6371 * 2 * math.asin(math.sqrt(a))
+                        session_valida = dist_km < 20
+                        if not session_valida:
+                            print(f"[GEO] GPS movido {dist_km:.1f}km desde sesión — ignorando caché de localidad")
+                    except Exception:
+                        session_valida = True  # ante error, reusar
+                if session_valida:
+                    cached_prov = cached_prov or session.get("provincia")
+                    cached_loc  = cached_loc  or session.get("localidad")
         # Preservar gps_reverse si la localidad/provincia vino de ese source
         save_source = "gps_reverse" if (cached_prov and cached_loc and
             session and session.get("source") == "gps_reverse") else "gps"

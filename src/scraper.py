@@ -22,11 +22,12 @@ import requests
 
 RESOURCE_ID     = "80ac25de-a44a-4445-9215-090cf55cfda5"
 API_URL         = "http://datos.energia.gob.ar/api/3/action/datastore_search"
-PAGE_SIZE       = 10000
+PAGE_SIZE       = 2000
 REQUEST_TIMEOUT = 60
 
 TABLE_LOCALIDADES = os.environ.get("DYNAMODB_TABLE_LOCALIDADES", "combustible-localidades")
 TABLE_HISTORICO   = os.environ.get("DYNAMODB_TABLE_HISTORICO",   "combustible-historico")
+TABLE_ESTACIONES  = os.environ.get("DYNAMODB_TABLE_ESTACIONES",  "combustible-estaciones")
 REGION            = os.environ.get("AWS_DEFAULT_REGION",         "sa-east-1")
 
 dynamodb = boto3.resource("dynamodb", region_name=REGION)
@@ -163,6 +164,70 @@ def _batch_write(table_name: str, items: list):
     print(f"[SCRAPER] {table_name}: OK — {written} ítems")
 
 
+# ─── Estaciones cache ────────────────────────────────────────────────────────
+
+def _save_estaciones_cache(records: list):
+    """
+    Guarda todos los registros CKAN en combustible-estaciones con TTL de 26h.
+    PK = provincia#localidad, SK = cuit#producto#tipohorario
+    """
+    table    = dynamodb.Table(TABLE_ESTACIONES)
+    now_ts   = int(__import__("time").time())
+    ttl_ts   = now_ts + 26 * 3600
+
+    # Deduplicar por (pk, sk): el dataset fuente puede tener registros repetidos.
+    # Mantenemos el de fecha_vigencia más reciente por clave.
+    deduped = {}
+    for rec in records:
+        provincia   = _norm_prov((rec.get("provincia") or "").strip().upper())
+        localidad   = (rec.get("localidad")   or "").strip().upper()
+        cuit        = (rec.get("cuit")        or "").strip()
+        producto    = (rec.get("producto")    or "").strip().upper()
+        tipohorario = (rec.get("tipohorario") or "DIURNO").strip().upper()
+
+        if not provincia or not localidad or not cuit or not producto:
+            continue
+
+        pk  = f"{provincia}#{localidad}"
+        sk  = f"{cuit}#{producto}#{tipohorario}"
+        key = (pk, sk)
+
+        existing = deduped.get(key)
+        fv_new = rec.get("fecha_vigencia") or ""
+        fv_old = (existing or {}).get("fecha_vigencia") or ""
+        if existing is None or fv_new >= fv_old:
+            deduped[key] = _strip_none({
+                "pk":             pk,
+                "sk":             sk,
+                "empresa":        (rec.get("empresa") or "").strip().upper() or None,
+                "bandera":        (rec.get("bandera") or rec.get("empresabandera") or "").strip().upper() or None,
+                "cuit":           cuit,
+                "direccion":      (rec.get("direccion") or "").strip() or None,
+                "localidad":      localidad,
+                "provincia":      provincia,
+                "region":         (rec.get("region") or "").strip().upper() or None,
+                "latitud":        _safe_decimal(rec.get("latitud")),
+                "longitud":       _safe_decimal(rec.get("longitud")),
+                "producto":       rec.get("producto"),
+                "precio":         _safe_decimal(rec.get("precio")),
+                "tipohorario":    rec.get("tipohorario"),
+                "fecha_vigencia": rec.get("fecha_vigencia"),
+                "ttl":            ttl_ts,
+                "cached_at":      now_ts,
+            })
+
+    items   = list(deduped.values())
+    written = 0
+    with table.batch_writer() as batch:
+        for item in items:
+            batch.put_item(Item=item)
+            written += 1
+            if written % 1000 == 0:
+                print(f"[SCRAPER] estaciones cache: {written}")
+
+    print(f"[SCRAPER] {TABLE_ESTACIONES}: OK — {written} ítems (de {len(records)} originales)")
+
+
 # ─── Handler ─────────────────────────────────────────────────────────────────
 
 def handler(event, context):
@@ -184,11 +249,15 @@ def handler(event, context):
     print(f"[SCRAPER] Escribiendo {len(localidad_items)} localidades...")
     _batch_write(TABLE_LOCALIDADES, localidad_items)
 
+    print(f"[SCRAPER] Cacheando {len(records)} estaciones en DynamoDB...")
+    _save_estaciones_cache(records)
+
     summary = {
         "fecha": fecha,
         "records_fetched": len(records),
         "historico_written": len(historico_items),
         "localidades_written": len(localidad_items),
+        "estaciones_cached": len(records),
     }
     print(f"[SCRAPER] Completo: {json.dumps(summary)}")
     return summary

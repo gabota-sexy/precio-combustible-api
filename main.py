@@ -498,12 +498,12 @@ def precios_smart(
         closest = db.localidad_mas_cercana(resolved_lat, resolved_lon, resolved_provincia)
         if closest:
             distancia_dataset_km = closest["distancia_km"]
-            # Si la localidad detectada no está en SQLite O está a > 2km, usamos la más cercana
-            en_dataset = db.get_localidad_coords(resolved_localidad or "", resolved_provincia) if resolved_localidad else None
-            if not en_dataset:
-                localidad_dataset = closest["localidad"]
-                if not resolved_localidad:
-                    resolved_localidad = localidad_dataset
+            # Siempre usamos la localidad más cercana a las coordenadas ACTUALES para
+            # la query CKAN. No usamos la localidad cacheada en sesión porque puede
+            # ser de una posición anterior (misma IP, distinta ubicación GPS).
+            localidad_dataset = closest["localidad"]
+            if not resolved_localidad:
+                resolved_localidad = localidad_dataset
 
     # Enriquecer la respuesta de ubicación con info de localidad
     location["localidad_detectada"]  = localidad_detectada
@@ -584,16 +584,19 @@ def precios_smart(
                 if not df.empty:
                     location["radio_ampliado"] = True
 
-        # Aplicar fecha_desde al final — graceful degradation:
-        # si filtrar por fecha vacía el resultado, mostramos igual sin filtro de fecha
-        if fecha_desde and not df.empty:
-            df_fecha = filtrar_por_fecha(df, fecha_desde)
-            if not df_fecha.empty:
-                df = df_fecha
-            else:
+        # Aplicar precio_vigente por estación — graceful degradation:
+        # Siempre mostramos todas las estaciones del radio. Cada una lleva
+        # precio_vigente=True/False según si su precio supera fecha_desde.
+        # El frontend puede usar este flag para mostrar badges de precio desactualizado.
+        if fecha_desde and not df.empty and 'fecha_vigencia' in df.columns:
+            cutoff = pd.Timestamp(fecha_desde)
+            df = df.copy()
+            df['precio_vigente'] = df['fecha_vigencia'] >= cutoff
+            stale_count = int((~df['precio_vigente']).sum())
+            if stale_count > 0:
                 location["advertencia_fecha"] = (
-                    f"No hay precios actualizados desde {fecha_desde} en el radio. "
-                    "Se muestran los últimos precios disponibles."
+                    f"{stale_count} estación(es) con precios anteriores a {fecha_desde}. "
+                    "Se muestran igualmente — revisar fecha_vigencia de cada estación."
                 )
     else:
         # Fallback por zona administrativa
@@ -601,7 +604,19 @@ def precios_smart(
         if not df.empty:
             if producto:
                 df = df[df['producto'].str.upper() == producto.upper()]
-            df = filtrar_por_fecha(df, fecha_desde)
+            if fecha_desde and 'fecha_vigencia' in df.columns:
+                cutoff = pd.Timestamp(fecha_desde)
+                df = df.copy()
+                df['precio_vigente'] = df['fecha_vigencia'] >= cutoff
+                df_fecha = df[df['precio_vigente']]
+                if not df_fecha.empty:
+                    df = df_fecha
+                else:
+                    # Graceful degradation: mostrar todos con precio_vigente=False y advertencia
+                    location["advertencia_fecha"] = (
+                        f"No hay precios actualizados desde {fecha_desde} en esta zona. "
+                        "Se muestran los últimos precios disponibles."
+                    )
             if 'precio' in df.columns:
                 df = df.sort_values('precio')
 
@@ -612,7 +627,7 @@ def precios_smart(
             "estaciones": []
         }
 
-    cols = [c for c in COLS_BASE + ['distancia_km'] if c in df.columns]
+    cols = [c for c in COLS_BASE + ['distancia_km', 'precio_vigente'] if c in df.columns]
     return {
         "ubicacion_resuelta": location,
         "total": len(df),
