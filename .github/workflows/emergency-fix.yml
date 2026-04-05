@@ -1,0 +1,30 @@
+name: Emergency SSH Fix
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ secrets.SERVER_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Inject session key
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
+            "echo '${{ secrets.SESSION_SSH_KEY }}' >> ~/.ssh/authorized_keys && echo 'key injected'"
+
+      - name: Check service status and logs
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
+            "echo '=== SERVICE STATUS ===' && \
+             systemctl status tankear --no-pager -l && \
+             echo '' && echo '=== JOURNAL LAST 50 ===' && \
+             journalctl -u tankear -n 50 --no-pager"
