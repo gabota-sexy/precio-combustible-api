@@ -1,0 +1,19 @@
+[Unit]
+Description=Tankear Telegram Bot
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/var/www/tankear
+Environment="TELEGRAM_BOT_TOKEN=8673787872:AAGuQs_0-geYNII9dcwWaEu5eZ7I0J6FNW8"
+Environment="TANKEAR_API_BASE=https://tankear.com.ar/api"
+ExecStart=/usr/bin/python3 /var/www/tankear/telegram_bot.py
+Restart=always
+RestartSec=10
+StandardOutput=append:/var/log/tankear-bot.log
+StandardError=append:/var/log/tankear-bot.log
+
+[Install]
+WantedBy=multi-user.target
