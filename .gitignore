@@ -4,3 +4,14 @@ __pycache__/
 .env
 .aws-sam
 .layer-build
+.aws-sam/
+.layer-build/
+lambda_handler.py
+db_dynamo.py
+build_layer.py
+template.yaml
+Makefile
+samconfig.toml
+setup_aws.sh
+layer/
+src/db_dynamo.py
