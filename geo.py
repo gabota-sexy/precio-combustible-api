@@ -171,6 +171,7 @@ def resolve_location(
     db_get_session,
     db_save_session,
     db_get_localidad_coords,
+    cf_headers: Optional[dict] = None,
 ) -> dict:
     """
     Devuelve la mejor ubicación disponible con el nivel de precisión alcanzado.
@@ -286,6 +287,31 @@ def resolve_location(
                     "localidad": session.get("localidad"),
                     "provincia": session.get("provincia"),
                 }
+
+    # 2.5. Headers de Cloudflare (CF-IPCity, CF-IPCountry, CF-IPLatitude, CF-IPLongitude)
+    # Más rápido y confiable que ip-api en producción detrás de Cloudflare
+    if cf_headers and cf_headers.get("CF-IPCountry") == "AR":
+        cf_lat = cf_headers.get("CF-IPLatitude")
+        cf_lon = cf_headers.get("CF-IPLongitude")
+        cf_city = cf_headers.get("CF-IPCity", "")
+        cf_region = cf_headers.get("CF-IPRegion", "")
+        if cf_lat and cf_lon:
+            try:
+                cf_lat_f = float(cf_lat)
+                cf_lon_f = float(cf_lon)
+                cf_prov = normalize_provincia(cf_region.upper()) if cf_region else None
+                if ip:
+                    db_save_session(ip, cf_lat_f, cf_lon_f, cf_city.upper() or None, cf_prov, "ip")
+                return {
+                    "method": "cf_headers",
+                    "precision": "aproximada",
+                    "lat": cf_lat_f,
+                    "lon": cf_lon_f,
+                    "localidad": cf_city.upper() if cf_city else None,
+                    "provincia": cf_prov,
+                }
+            except (ValueError, TypeError):
+                pass
 
     # 3. Geolocalización en tiempo real por IP
     if ip:
