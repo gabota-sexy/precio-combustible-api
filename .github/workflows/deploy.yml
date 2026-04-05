@@ -43,6 +43,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 2   # necesario para que HEAD~1 exista en git diff
 
       - name: Download frontend dist
         uses: actions/download-artifact@v4
@@ -65,38 +67,27 @@ jobs:
             ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/var/www/tankear/frontend/
           echo "✅ Frontend deployed"
 
-      - name: Deploy backend (si main_do.py cambió)
+      - name: Deploy backend
         run: |
-          # Detectar si el backend cambió en este push
-          CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null | grep -E "^(main_do\.py|db_sqlite\.py|geo\.py|scraper_do\.py|precio_ciencia\.py)" || true)
+          # Siempre copiar todos los archivos Python del backend
+          BACKEND_FILES="main_do.py db_sqlite.py geo.py scraper_do.py precio_ciencia.py telegram_bot.py"
 
-          if [ -n "$CHANGED" ]; then
-            echo "📦 Backend cambió, desplegando: $CHANGED"
+          echo "📦 Copiando archivos de backend al servidor..."
+          for file in $BACKEND_FILES; do
+            if [ -f "$file" ]; then
+              scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+                "$file" \
+                ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/var/www/tankear/api/
+              echo "  ✓ $file"
+            fi
+          done
 
-            # Copiar archivos al servidor
-            for file in $CHANGED; do
-              if [ -f "$file" ]; then
-                scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
-                  "$file" \
-                  ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/var/www/tankear/api/
-
-                # main_do.py va también como main.py (el que usa el servicio)
-                if [ "$file" = "main_do.py" ]; then
-                  ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
-                    ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
-                    "cp /var/www/tankear/api/main_do.py /var/www/tankear/api/main.py"
-                fi
-              fi
-            done
-
-            # Reiniciar el servicio
-            ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
-              ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
-              "systemctl restart tankear && sleep 2 && systemctl is-active tankear"
-            echo "✅ Backend reiniciado"
-          else
-            echo "⏭️  Backend sin cambios, no se reinicia el servicio"
-          fi
+          # main_do.py va también como main.py (el que usa el servicio systemd)
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
+            "cp /var/www/tankear/api/main_do.py /var/www/tankear/api/main.py && \
+             systemctl restart tankear && sleep 2 && systemctl is-active tankear"
+          echo "✅ Backend desplegado y reiniciado"
 
       - name: Health check
         run: |
