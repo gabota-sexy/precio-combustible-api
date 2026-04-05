@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+Disallow: /verificar
+Disallow: /api/
+
+Sitemap: https://tankear.com.ar/sitemap.xml
