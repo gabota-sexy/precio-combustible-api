@@ -2349,6 +2349,59 @@ async def recibir_feedback(request: Request, body: FeedbackIn):
     return {"ok": True}
 
 
+# ── /info — info del dataset (fecha de última actualización) ──────────────────
+
+@app.get("/info")
+@limiter.limit("60/minute")
+async def dataset_info(request: Request):
+    """Retorna metadata del dataset: cuándo se actualizó por última vez."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT MAX(fecha_actualizacion) as last_mod FROM estaciones"
+        ).fetchone()
+        conn.close()
+        last_mod = row["last_mod"] if row and row["last_mod"] else datetime.utcnow().isoformat()
+        return {
+            "dataset":       "Precios de combustible Argentina",
+            "fuente":        "Secretaría de Energía — datos.gob.ar",
+            "last_modified": last_mod,
+        }
+    except Exception as e:
+        return {
+            "dataset":       "Precios de combustible Argentina",
+            "fuente":        "Secretaría de Energía — datos.gob.ar",
+            "last_modified": datetime.utcnow().isoformat(),
+        }
+
+
+# ── /geoip — proxy de ip-api.com para evitar el 403 desde browser ─────────────
+
+@app.get("/geoip")
+@limiter.limit("30/minute")
+async def geoip(request: Request):
+    """Proxy a ip-api.com para geolocalización por IP del cliente."""
+    client_ip = request.headers.get("X-Forwarded-For", request.client.host).split(",")[0].strip()
+    try:
+        resp = requests.get(
+            f"http://ip-api.com/json/{client_ip}?fields=status,city,regionName,country,query",
+            timeout=5,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            return {
+                "status":   data.get("status"),
+                "city":     data.get("city"),
+                "region":   data.get("regionName"),
+                "country":  data.get("country"),
+                "query":    data.get("query"),
+            }
+    except Exception:
+        pass
+    return {"status": "fail"}
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8000)

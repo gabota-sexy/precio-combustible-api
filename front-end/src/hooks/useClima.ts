@@ -88,8 +88,10 @@ function fetchWithTimeout(url: string, ms: number): Promise<Response> {
 }
 
 async function getCityFromIP(): Promise<{ city: string | null; ip: string | null }> {
+  // Usamos el proxy del backend para evitar el 403 que da ip-api.com desde el browser
+  const apiBase = import.meta.env.VITE_API_BASE || 'https://tankear.com.ar/api';
   try {
-    const r = await fetchWithTimeout('https://ip-api.com/json/?fields=status,city,country,query', 4000);
+    const r = await fetchWithTimeout(`${apiBase}/geoip`, 4000);
     const j = await r.json();
     const ip = j.query ?? null;
     if (j.status === 'success' && j.country === 'Argentina' && j.city) {
