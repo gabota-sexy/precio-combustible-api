@@ -85,6 +85,20 @@ def init_db():
         );
         CREATE INDEX IF NOT EXISTS idx_tgmsg_chat ON telegram_messages(chat_id);
         CREATE INDEX IF NOT EXISTS idx_tgmsg_int  ON telegram_messages(intencion);
+
+        CREATE TABLE IF NOT EXISTS telegram_alerts (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id      INTEGER NOT NULL,
+            username     TEXT,
+            producto     TEXT NOT NULL,
+            precio_max   REAL NOT NULL,
+            provincia    TEXT,
+            activo       INTEGER DEFAULT 1,
+            created_at   TEXT DEFAULT (datetime('now')),
+            triggered_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_alerts_chat   ON telegram_alerts(chat_id);
+        CREATE INDEX IF NOT EXISTS idx_alerts_activo ON telegram_alerts(activo);
     """)
     conn.commit()
     conn.close()
@@ -294,6 +308,60 @@ def get_telegram_messages(limit: int = 200, intencion: str = None) -> list:
         ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+# ─── Telegram price alerts ───────────────────────────────────────────────────
+
+def create_alert(chat_id: int, username: str, producto: str,
+                 precio_max: float, provincia: str = "") -> int:
+    conn = _conn()
+    cur = conn.execute("""
+        INSERT INTO telegram_alerts (chat_id, username, producto, precio_max, provincia)
+        VALUES (?, ?, ?, ?, ?)
+    """, (chat_id, username or "", producto, precio_max, provincia or ""))
+    conn.commit()
+    alert_id = cur.lastrowid
+    conn.close()
+    return alert_id
+
+
+def get_alerts_for_user(chat_id: int) -> list:
+    conn = _conn()
+    rows = conn.execute(
+        "SELECT * FROM telegram_alerts WHERE chat_id=? AND activo=1 ORDER BY created_at DESC",
+        (chat_id,)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def cancel_alert(alert_id: int, chat_id: int):
+    conn = _conn()
+    conn.execute(
+        "UPDATE telegram_alerts SET activo=0 WHERE id=? AND chat_id=?",
+        (alert_id, chat_id)
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_all_active_alerts() -> list:
+    conn = _conn()
+    rows = conn.execute(
+        "SELECT * FROM telegram_alerts WHERE activo=1"
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def mark_alert_triggered(alert_id: int):
+    conn = _conn()
+    conn.execute(
+        "UPDATE telegram_alerts SET triggered_at=datetime('now') WHERE id=?",
+        (alert_id,)
+    )
+    conn.commit()
+    conn.close()
 
 
 def get_telegram_stats() -> dict:

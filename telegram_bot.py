@@ -62,8 +62,27 @@ TOKEN    = os.getenv("TELEGRAM_BOT_TOKEN", "8673787872:AAGuQs_0-geYNII9dcwWaEu5e
 API_BASE = os.getenv("TANKEAR_API_BASE",   "https://tankear.com.ar/api")
 
 # ConversationHandler states
-ESPERANDO_CONTACTO = 1
-ESPERANDO_ZONA     = 2
+ESPERANDO_CONTACTO  = 1
+ESPERANDO_ZONA      = 2
+ALERTA_PRODUCTO     = 10
+ALERTA_PRECIO       = 11
+ALERTA_PROVINCIA    = 12
+REPORTAR_EMPRESA    = 20
+REPORTAR_PRODUCTO   = 21
+REPORTAR_PRECIO     = 22
+
+# Normalización de productos para alertas
+PRODUCTOS_NORM = {
+    "super":   "Nafta (súper) entre 92 y 95 Ron",
+    "súper":   "Nafta (súper) entre 92 y 95 Ron",
+    "nafta":   "Nafta (súper) entre 92 y 95 Ron",
+    "premium": "Nafta (premium) de más de 95 Ron",
+    "infinia": "Nafta (premium) de más de 95 Ron",
+    "gasoil":  "Gas Oil Grado 2",
+    "diesel":  "Gas Oil Grado 2",
+    "gasoil3": "Gas Oil Grado 3",
+    "gnc":     "GNC",
+}
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -472,8 +491,406 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await cmd_cotizar(update, context)
     elif data == "suscribir":
         return await cmd_suscribir(update, context)
+    elif data.startswith("cancel_alert_"):
+        alert_id = int(data.split("_")[-1])
+        if _DB_OK:
+            db.cancel_alert(alert_id, query.from_user.id)
+        await query.answer("Alerta cancelada ✓")
+        await cmd_misalertas(update, context)
+        return None
 
     return None
+
+# ── /barata — estación más barata cerca ──────────────────────────────────────
+
+async def cmd_barata(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user  = update.effective_user
+    chat_id = user.id
+    args  = context.args or []
+    zona  = " ".join(args).strip() if args else ""
+
+    # Intentar obtener zona del perfil guardado
+    if not zona and _DB_OK:
+        subs = [s for s in db.get_telegram_subscribers() if s["chat_id"] == chat_id]
+        if subs and subs[0].get("provincia"):
+            zona = subs[0]["provincia"]
+
+    await update.message.reply_text("🔍 Buscando la estación más barata\\.\\.\\.".replace("...", "\\.\\.\\."),
+                                     parse_mode=ParseMode.MARKDOWN_V2)
+    try:
+        params = {"limit": 200}
+        if zona:
+            params["provincia"] = zona.upper()
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.get(f"{API_BASE}/precios", params=params)
+            data = r.json()
+        estaciones = data.get("estaciones", []) if isinstance(data, dict) else data
+        if not estaciones:
+            await update.message.reply_text("No encontré estaciones\\. Probá con `/barata Buenos Aires`",
+                                             parse_mode=ParseMode.MARKDOWN_V2)
+            return
+
+        # Agrupar por producto y encontrar la más barata
+        from collections import defaultdict
+        por_producto = defaultdict(list)
+        for e in estaciones:
+            prod = e.get("producto", "")
+            precio = e.get("precio")
+            if precio and float(precio) > 500:  # filtrar datos históricos
+                por_producto[prod].append(e)
+
+        lineas = [f"⛽ *Más baratas en {escape_md(zona or 'Argentina')}*\n"]
+        for prod, lista in sorted(por_producto.items()):
+            lista.sort(key=lambda x: float(x.get("precio", 9999)))
+            mejor = lista[0]
+            precio = float(mejor["precio"])
+            empresa = mejor.get("empresa", mejor.get("bandera", "?"))
+            localidad = mejor.get("localidad", "")
+            lineas.append(
+                f"*{escape_md(prod)}*\n"
+                f"  {escape_md(empresa)} — {escape_md(localidad)}\n"
+                f"  💰 `{fmt_precio(precio)}/L`"
+            )
+        lineas.append(f"\n[Ver todas en Tankear](https://tankear\\.com\\.ar)")
+        await update.message.reply_text("\n".join(lineas),
+                                         parse_mode=ParseMode.MARKDOWN_V2,
+                                         reply_markup=kb_menu_principal())
+    except Exception as e:
+        logger.warning(f"cmd_barata error: {e}")
+        await update.message.reply_text("Error al buscar\\. Intentá de nuevo en un momento\\.",
+                                         parse_mode=ParseMode.MARKDOWN_V2)
+
+
+# ── /viaje — calculadora de ruta ──────────────────────────────────────────────
+
+async def cmd_viaje(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    args = context.args or []
+    if len(args) < 2:
+        await update.message.reply_text(
+            "🗺️ *Calculadora de viaje*\n\n"
+            "Uso: `/viaje [origen] [destino]`\n"
+            "Ejemplo: `/viaje Buenos\\_Aires Córdoba`\n\n"
+            "También podés usar: `/viaje BuenosAires Mendoza`",
+            parse_mode=ParseMode.MARKDOWN_V2,
+        )
+        return
+
+    # Separar origen y destino: si hay más de 2 args, el último es destino
+    mid = len(args) // 2
+    origen  = " ".join(args[:mid]) if len(args) > 2 else args[0]
+    destino = " ".join(args[mid:]) if len(args) > 2 else args[1]
+    origen  = origen.replace("_", " ")
+    destino = destino.replace("_", " ")
+
+    await update.message.reply_text(
+        f"🗺️ Calculando viaje *{escape_md(origen)}* → *{escape_md(destino)}*\\.\\.\\.",
+        parse_mode=ParseMode.MARKDOWN_V2,
+    )
+
+    try:
+        # Geocodificar ambos puntos con Nominatim
+        async with httpx.AsyncClient(timeout=10, headers={"User-Agent": "Tankear/3.0"}) as client:
+            def _geo(q):
+                return client.get("https://nominatim.openstreetmap.org/search",
+                    params={"q": f"{q}, Argentina", "format": "json", "limit": 1})
+
+            r_or, r_dst = await asyncio.gather(_geo(origen), _geo(destino))
+            geo_or  = r_or.json()
+            geo_dst = r_dst.json()
+
+        if not geo_or or not geo_dst:
+            await update.message.reply_text(
+                "No pude ubicar origen o destino\\. Probá con nombres más específicos\\.",
+                parse_mode=ParseMode.MARKDOWN_V2)
+            return
+
+        lat1, lon1 = float(geo_or[0]["lat"]),  float(geo_or[0]["lon"])
+        lat2, lon2 = float(geo_dst[0]["lat"]), float(geo_dst[0]["lon"])
+
+        # Distancia haversine × factor ruta 1.35
+        import math
+        R = 6371
+        dlat = math.radians(lat2 - lat1)
+        dlon = math.radians(lon2 - lon1)
+        a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon/2)**2
+        dist_linea = R * 2 * math.asin(math.sqrt(a))
+        dist_ruta  = round(dist_linea * 1.35)
+
+        # Obtener precio súper en zona de origen
+        prov_origen = geo_or[0].get("display_name", "").split(",")[-2].strip()
+        stats = await get_estadisticas(provincia=prov_origen)
+        precio_super = None
+        if stats:
+            for p in stats.get("por_producto", []):
+                if "92" in p.get("producto", "") or "súper" in p.get("producto", "").lower():
+                    precio_super = p.get("promedio")
+                    break
+
+        CONSUMO = 10.0  # L/100km promedio
+        litros  = round(dist_ruta * CONSUMO / 100, 1)
+        costo   = round(litros * precio_super) if precio_super else None
+
+        lineas = [
+            f"🗺️ *{escape_md(origen)}* → *{escape_md(destino)}*\n",
+            f"📏 Distancia estimada: `{dist_ruta} km`",
+            f"⛽ Consumo \\(10L/100km\\): `{litros} L`",
+        ]
+        if costo and precio_super:
+            lineas.append(f"💰 Costo aprox\\. nafta súper: `{fmt_precio(costo)}`")
+            lineas.append(f"   \\(a {fmt_precio(precio_super)}/L en {escape_md(prov_origen)}\\)")
+        lineas.append(f"\n[Calculadora completa en Tankear](https://tankear\\.com\\.ar/viaje)")
+
+        await update.message.reply_text("\n".join(lineas),
+                                         parse_mode=ParseMode.MARKDOWN_V2,
+                                         reply_markup=kb_menu_principal())
+    except Exception as e:
+        logger.warning(f"cmd_viaje error: {e}")
+        await update.message.reply_text(
+            "No pude calcular el viaje\\. Intentá de nuevo\\.",
+            parse_mode=ParseMode.MARKDOWN_V2)
+
+
+# ── /alerta — alertas personalizadas de precio ───────────────────────────────
+
+async def cmd_alerta(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    args = context.args or []
+    # Uso rápido: /alerta super 1400 BuenosAires
+    if len(args) >= 2:
+        prod_raw  = args[0].lower()
+        try:
+            precio_max = float(args[1].replace("$", "").replace(".", "").replace(",", "."))
+        except ValueError:
+            precio_max = None
+        provincia = " ".join(args[2:]).replace("_", " ") if len(args) > 2 else ""
+        producto  = PRODUCTOS_NORM.get(prod_raw, prod_raw.title())
+
+        if precio_max and _DB_OK:
+            user = update.effective_user
+            db.create_alert(user.id, user.username or "", producto, precio_max, provincia)
+            await update.message.reply_text(
+                f"🔔 *Alerta creada\\!*\n\n"
+                f"Te aviso cuando *{escape_md(producto)}* baje de "
+                f"`{fmt_precio(precio_max)}/L`"
+                f"{f' en {escape_md(provincia)}' if provincia else ''}\\.",
+                parse_mode=ParseMode.MARKDOWN_V2,
+                reply_markup=kb_menu_principal(),
+            )
+            return ConversationHandler.END
+
+    # Modo conversacional
+    await update.message.reply_text(
+        "🔔 *Nueva alerta de precio*\n\n"
+        "¿Para qué *producto* querés la alerta?\n\n"
+        "• súper\n• premium\n• gasoil\n• gnc\n\nEscribí el nombre:",
+        parse_mode=ParseMode.MARKDOWN_V2,
+    )
+    return ALERTA_PRODUCTO
+
+
+async def alerta_recibir_producto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    prod_raw = update.message.text.strip().lower()
+    producto = PRODUCTOS_NORM.get(prod_raw, update.message.text.strip().title())
+    context.user_data["alerta_producto"] = producto
+    await update.message.reply_text(
+        f"✓ Producto: *{escape_md(producto)}*\n\n"
+        f"¿A qué precio máximo querés la alerta? \\(ej: `1400`\\)",
+        parse_mode=ParseMode.MARKDOWN_V2,
+    )
+    return ALERTA_PRECIO
+
+
+async def alerta_recibir_precio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    try:
+        precio = float(update.message.text.strip().replace("$", "").replace(".", "").replace(",", "."))
+    except ValueError:
+        await update.message.reply_text("Escribí solo el número, ej: `1400`", parse_mode=ParseMode.MARKDOWN_V2)
+        return ALERTA_PRECIO
+    context.user_data["alerta_precio"] = precio
+    await update.message.reply_text(
+        f"✓ Precio: *{fmt_precio(precio)}/L*\n\n"
+        f"¿En qué provincia? \\(ej: Buenos Aires\\) o /saltar para todas:",
+        parse_mode=ParseMode.MARKDOWN_V2,
+    )
+    return ALERTA_PROVINCIA
+
+
+async def alerta_recibir_provincia(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    provincia = update.message.text.strip()
+    return await _guardar_alerta(update, context, provincia)
+
+
+async def alerta_saltar_provincia(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    return await _guardar_alerta(update, context, "")
+
+
+async def _guardar_alerta(update: Update, context: ContextTypes.DEFAULT_TYPE, provincia: str) -> int:
+    user     = update.effective_user
+    producto = context.user_data.get("alerta_producto", "Nafta (súper)")
+    precio   = context.user_data.get("alerta_precio", 0)
+    if _DB_OK:
+        db.create_alert(user.id, user.username or "", producto, precio, provincia)
+    await update.message.reply_text(
+        f"✅ *Alerta guardada\\!*\n\n"
+        f"⛽ {escape_md(producto)}\n"
+        f"💰 Precio umbral: `{fmt_precio(precio)}/L`\n"
+        f"📍 {escape_md(provincia) if provincia else 'Todo el país'}\n\n"
+        f"Te aviso cuando el precio baje de ese valor\\.",
+        parse_mode=ParseMode.MARKDOWN_V2,
+        reply_markup=kb_menu_principal(),
+    )
+    return ConversationHandler.END
+
+
+# ── /misalertas — ver y cancelar alertas ────────────────────────────────────
+
+async def cmd_misalertas(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _DB_OK:
+        await update.message.reply_text("Servicio no disponible\\.", parse_mode=ParseMode.MARKDOWN_V2)
+        return
+    chat_id = update.effective_user.id
+    alertas = db.get_alerts_for_user(chat_id)
+    if not alertas:
+        await update.message.reply_text(
+            "No tenés alertas activas\\.\n\nUsá /alerta para crear una\\.",
+            parse_mode=ParseMode.MARKDOWN_V2,
+            reply_markup=kb_menu_principal(),
+        )
+        return
+
+    botones = []
+    lineas  = ["🔔 *Tus alertas activas:*\n"]
+    for a in alertas:
+        prov = f" \\({escape_md(a['provincia'])}\\)" if a.get("provincia") else ""
+        lineas.append(
+            f"*{escape_md(a['producto'])}*{prov}\n"
+            f"  Avisame si baja de `{fmt_precio(a['precio_max'])}/L`"
+        )
+        botones.append([InlineKeyboardButton(
+            f"❌ Cancelar: {a['producto'][:20]}",
+            callback_data=f"cancel_alert_{a['id']}"
+        )])
+
+    botones.append([InlineKeyboardButton("↩️ Menú", callback_data="menu")])
+    await update.message.reply_text(
+        "\n".join(lineas),
+        parse_mode=ParseMode.MARKDOWN_V2,
+        reply_markup=InlineKeyboardMarkup(botones),
+    )
+
+
+# ── /resumen — resumen semanal de precios ────────────────────────────────────
+
+async def cmd_resumen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    args = context.args or []
+    zona = " ".join(args).strip() if args else ""
+
+    if not zona and _DB_OK:
+        chat_id = update.effective_user.id
+        subs = [s for s in db.get_telegram_subscribers() if s["chat_id"] == chat_id]
+        if subs and subs[0].get("provincia"):
+            zona = subs[0]["provincia"]
+
+    provincia = zona.upper() if zona else "BUENOS AIRES"
+    stats = await get_estadisticas(provincia=provincia)
+    if not stats or not stats.get("por_producto"):
+        await update.message.reply_text(
+            "No pude obtener el resumen\\. Intentá de nuevo\\.",
+            parse_mode=ParseMode.MARKDOWN_V2)
+        return
+
+    from datetime import date
+    hoy = date.today().strftime("%d/%m/%Y")
+    lineas = [f"📊 *Resumen de precios — {escape_md(provincia)}*\n_{escape_md(hoy)}_\n"]
+
+    for p in stats["por_producto"]:
+        prod  = p.get("producto", "")
+        prom  = p.get("promedio")
+        mini  = p.get("minimo")
+        maxi  = p.get("maximo")
+        if not prom:
+            continue
+        lineas.append(
+            f"*{escape_md(prod)}*\n"
+            f"  Promedio: `{fmt_precio(prom)}/L`\n"
+            f"  Rango: `{fmt_precio(mini)}` — `{fmt_precio(maxi)}/L`"
+        )
+
+    ultima = stats.get("ultima_actualizacion", "")
+    if ultima:
+        lineas.append(f"\n_Actualizado: {escape_md(str(ultima)[:10])}_")
+    lineas.append(f"\n[Ver más en Tankear](https://tankear\\.com\\.ar)")
+
+    await update.message.reply_text(
+        "\n".join(lineas),
+        parse_mode=ParseMode.MARKDOWN_V2,
+        reply_markup=kb_menu_principal(),
+    )
+
+
+# ── /reportar — reportar precio en estación ──────────────────────────────────
+
+async def cmd_reportar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.message.reply_text(
+        "📝 *Reportar precio en una estación*\n\n"
+        "¿En qué *empresa/marca* viste el precio? \\(ej: YPF, Shell, Axion\\)",
+        parse_mode=ParseMode.MARKDOWN_V2,
+    )
+    return REPORTAR_EMPRESA
+
+
+async def reportar_empresa(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data["rep_empresa"] = update.message.text.strip().upper()
+    await update.message.reply_text(
+        f"✓ Empresa: *{escape_md(context.user_data['rep_empresa'])}*\n\n"
+        f"¿Qué *producto* viste? \\(súper, premium, gasoil, gnc\\)",
+        parse_mode=ParseMode.MARKDOWN_V2,
+    )
+    return REPORTAR_PRODUCTO
+
+
+async def reportar_producto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    prod_raw = update.message.text.strip().lower()
+    context.user_data["rep_producto"] = PRODUCTOS_NORM.get(prod_raw, update.message.text.strip().title())
+    await update.message.reply_text(
+        f"✓ Producto: *{escape_md(context.user_data['rep_producto'])}*\n\n"
+        f"¿Cuál era el *precio*? \\(ej: 1580\\)",
+        parse_mode=ParseMode.MARKDOWN_V2,
+    )
+    return REPORTAR_PRECIO
+
+
+async def reportar_precio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    try:
+        precio = float(update.message.text.strip().replace("$", "").replace(".", "").replace(",", "."))
+    except ValueError:
+        await update.message.reply_text("Escribí solo el número, ej: `1580`", parse_mode=ParseMode.MARKDOWN_V2)
+        return REPORTAR_PRECIO
+
+    user    = update.effective_user
+    empresa = context.user_data.get("rep_empresa", "?")
+    producto = context.user_data.get("rep_producto", "?")
+
+    if _DB_OK:
+        db.log_telegram_message(
+            chat_id    = user.id,
+            username   = user.username or "",
+            first_name = user.first_name or "",
+            text       = f"REPORTE: {empresa} | {producto} | ${precio}",
+            intencion  = "reporte_precio",
+            score_lead = 0,
+        )
+
+    await update.message.reply_text(
+        f"✅ *¡Gracias por reportar\\!*\n\n"
+        f"🏪 {escape_md(empresa)}\n"
+        f"⛽ {escape_md(producto)}\n"
+        f"💰 `{fmt_precio(precio)}/L`\n\n"
+        f"Tu reporte ayuda a toda la comunidad Tankear 🚗",
+        parse_mode=ParseMode.MARKDOWN_V2,
+        reply_markup=kb_menu_principal(),
+    )
+    return ConversationHandler.END
+
 
 # ── Fallback: mensajes de texto fuera de conversación ─────────────────────────
 
@@ -537,12 +954,18 @@ async def handle_texto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 async def post_init(app: Application) -> None:
     """Registra los comandos visibles en el menú de Telegram."""
     await app.bot.set_my_commands([
-        BotCommand("start",     "Inicio — menú principal"),
-        BotCommand("precios",   "Precios de nafta en Argentina"),
-        BotCommand("dolar",     "Dólar blue y oficial hoy"),
-        BotCommand("cotizar",   "Cotizá tu seguro de auto"),
-        BotCommand("suscribir", "Alertas de precio gratis"),
-        BotCommand("ayuda",     "Ayuda y comandos"),
+        BotCommand("start",      "Inicio — menú principal"),
+        BotCommand("precios",    "Precios de nafta en tu zona"),
+        BotCommand("barata",     "Estación más barata cerca"),
+        BotCommand("resumen",    "Resumen de precios de la semana"),
+        BotCommand("viaje",      "Calculadora de viaje en auto"),
+        BotCommand("alerta",     "Alerta cuando baje un precio"),
+        BotCommand("misalertas", "Ver y cancelar tus alertas"),
+        BotCommand("reportar",   "Reportar un precio que viste"),
+        BotCommand("dolar",      "Dólar blue y oficial hoy"),
+        BotCommand("cotizar",    "Cotizá tu seguro de auto"),
+        BotCommand("suscribir",  "Suscripción a alertas de zona"),
+        BotCommand("ayuda",      "Ayuda y todos los comandos"),
     ])
     logger.info("Bot iniciado — @Tankear_bot")
 
@@ -572,14 +995,45 @@ def main() -> None:
         fallbacks=[CommandHandler("cancelar", cancelar_suscripcion)],
     )
 
+    # ConversationHandler para /alerta
+    conv_alerta = ConversationHandler(
+        entry_points=[CommandHandler("alerta", cmd_alerta)],
+        states={
+            ALERTA_PRODUCTO:  [MessageHandler(filters.TEXT & ~filters.COMMAND, alerta_recibir_producto)],
+            ALERTA_PRECIO:    [MessageHandler(filters.TEXT & ~filters.COMMAND, alerta_recibir_precio)],
+            ALERTA_PROVINCIA: [
+                CommandHandler("saltar", alerta_saltar_provincia),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, alerta_recibir_provincia),
+            ],
+        },
+        fallbacks=[CommandHandler("cancelar", cancelar_suscripcion)],
+    )
+
+    # ConversationHandler para /reportar
+    conv_reportar = ConversationHandler(
+        entry_points=[CommandHandler("reportar", cmd_reportar)],
+        states={
+            REPORTAR_EMPRESA:  [MessageHandler(filters.TEXT & ~filters.COMMAND, reportar_empresa)],
+            REPORTAR_PRODUCTO: [MessageHandler(filters.TEXT & ~filters.COMMAND, reportar_producto)],
+            REPORTAR_PRECIO:   [MessageHandler(filters.TEXT & ~filters.COMMAND, reportar_precio)],
+        },
+        fallbacks=[CommandHandler("cancelar", cancelar_suscripcion)],
+    )
+
     # Registrar handlers
-    app.add_handler(CommandHandler("start",   cmd_start))
-    app.add_handler(CommandHandler("ayuda",   cmd_ayuda))
-    app.add_handler(CommandHandler("help",    cmd_ayuda))
-    app.add_handler(CommandHandler("dolar",   cmd_dolar))
-    app.add_handler(CommandHandler("precios", cmd_precios))
-    app.add_handler(CommandHandler("cotizar", cmd_cotizar))
+    app.add_handler(CommandHandler("start",      cmd_start))
+    app.add_handler(CommandHandler("ayuda",      cmd_ayuda))
+    app.add_handler(CommandHandler("help",       cmd_ayuda))
+    app.add_handler(CommandHandler("dolar",      cmd_dolar))
+    app.add_handler(CommandHandler("precios",    cmd_precios))
+    app.add_handler(CommandHandler("barata",     cmd_barata))
+    app.add_handler(CommandHandler("viaje",      cmd_viaje))
+    app.add_handler(CommandHandler("resumen",    cmd_resumen))
+    app.add_handler(CommandHandler("misalertas", cmd_misalertas))
+    app.add_handler(CommandHandler("cotizar",    cmd_cotizar))
     app.add_handler(conv_suscribir)
+    app.add_handler(conv_alerta)
+    app.add_handler(conv_reportar)
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_texto))
 

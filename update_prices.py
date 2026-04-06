@@ -192,6 +192,81 @@ def send_telegram(chat_id: int, text: str) -> bool:
         return False
 
 
+CANAL = "@tankear_ar"  # canal público de Telegram
+
+def post_to_channel(cambios: list[dict]) -> bool:
+    """Publica resumen de cambios en el canal @tankear_ar."""
+    if not cambios:
+        return False
+    hoy = datetime.now().strftime("%d/%m/%Y")
+    # Top 5 cambios más importantes de todo el país
+    top = cambios[:5]
+    lineas = [f"⛽ *Actualización de precios — {_esc(hoy)}*\n"]
+    for c in top:
+        flecha = "📈" if c["cambio_pct"] > 0 else "📉"
+        signo  = "+" if c["cambio_pct"] > 0 else ""
+        lineas.append(
+            f"{flecha} *{_esc(c['provincia'])}* — {_esc(c['producto'])}\n"
+            f"   `${c['precio_antes']:.0f}` → `${c['precio_ahora']:.0f}` "
+            f"\\({_esc(signo + str(c['cambio_pct']))}%\\)"
+        )
+    lineas.append(f"\n🔔 Suscribite a alertas personalizadas: @Tankear\\_bot")
+    lineas.append(f"[Ver todos los precios](https://tankear\\.com\\.ar)")
+    texto = "\n".join(lineas)
+    ok = send_telegram(CANAL, texto)
+    log.info(f"Canal @tankear_ar notificado: {'✓' if ok else '✗'}")
+    return ok
+
+
+def check_personal_alerts(records: list[dict]) -> int:
+    """Verifica alertas personalizadas y notifica si se cumple la condición."""
+    alertas = db.get_all_active_alerts()
+    if not alertas:
+        return 0
+
+    # Construir índice {(provincia_upper, producto_upper): precio_promedio}
+    from collections import defaultdict
+    sums = defaultdict(list)
+    for r in records:
+        if r.get("precio") and r.get("provincia") and r.get("producto"):
+            sums[(r["provincia"].upper(), r["producto"].upper())].append(float(r["precio"]))
+    precios_actuales = {k: sum(v)/len(v) for k, v in sums.items()}
+
+    notificados = 0
+    for alerta in alertas:
+        chat_id   = alerta["chat_id"]
+        producto  = alerta["producto"].upper()
+        precio_max = float(alerta["precio_max"])
+        provincia = (alerta.get("provincia") or "").upper()
+
+        # Buscar precio actual para este producto+provincia
+        precio_actual = None
+        if provincia:
+            precio_actual = precios_actuales.get((provincia, producto))
+        if precio_actual is None:
+            # Buscar en cualquier provincia
+            matches = [v for (p, pr), v in precios_actuales.items() if pr == producto]
+            if matches:
+                precio_actual = min(matches)
+
+        if precio_actual and precio_actual <= precio_max:
+            texto = (
+                f"🔔 *¡Alerta de precio activada\\!*\n\n"
+                f"⛽ {_esc(alerta['producto'])}\n"
+                f"💰 Precio actual: `${precio_actual:.0f}/L`\n"
+                f"📉 Bajó de tu umbral: `${precio_max:.0f}/L`\n"
+                f"📍 {_esc(provincia) if provincia else 'Argentina'}\n\n"
+                f"[Ver estaciones en Tankear](https://tankear\\.com\\.ar)"
+            )
+            if send_telegram(chat_id, texto):
+                db.mark_alert_triggered(alerta["id"])
+                notificados += 1
+                log.info(f"  ✓ Alerta personal disparada: chat_id={chat_id} {alerta['producto']} < ${precio_max}")
+            time.sleep(0.05)
+
+    return notificados
+
+
 def notify_subscribers(cambios: list[dict]) -> int:
     """Envía alertas a suscriptores activos. Retorna cantidad notificados."""
     if not cambios:
@@ -269,7 +344,14 @@ def main():
     for c in cambios[:10]:
         log.info(f"  {c['provincia']} | {c['producto']}: {c['precio_antes']} → {c['precio_ahora']} ({c['cambio_pct']:+.1f}%)")
 
-    # Notificar suscriptores
+    # Publicar en canal @tankear_ar
+    post_to_channel(cambios)
+
+    # Chequear alertas personalizadas
+    n_alertas = check_personal_alerts(records)
+    log.info(f"Alertas personalizadas disparadas: {n_alertas}")
+
+    # Notificar suscriptores 1:1
     n = notify_subscribers(cambios)
     log.info(f"Suscriptores notificados: {n}")
 
