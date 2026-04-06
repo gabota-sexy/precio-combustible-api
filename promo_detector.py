@@ -65,9 +65,15 @@ KW_PROMO = [
 ]
 KW_TARJETA = [
     "visa", "mastercard", "maestro", "american express", "amex",
-    "naranja", "cabal", "bbva", "galicia", "santander", "hsbc",
+    "naranja x", "naranja", "cabal", "bbva", "galicia", "santander", "hsbc",
     "macro", "supervielle", "nación", "nacion", "provincia", "ciudad",
-    "itaú", "itau", "patagonia", "icbc", "uala", "mercado pago",
+    "itaú", "itau", "patagonia", "icbc", "uala", "mercado pago", "modo",
+]
+
+# Remitentes de wallets/tarjetas — aplican filtro estricto de combustible
+REMITENTES_WALLET = [
+    "naranjax.com", "naranja.com.ar", "modo.com.ar",
+    "mercadopago.com", "uala.com.ar",
 ]
 
 # Palabras que indican que NO es una promo de combustible
@@ -159,30 +165,81 @@ def _es_promo_combustible(asunto: str, texto: str, remitente: str = "") -> bool:
     return True
 
 
+def _detectar_categoria(asunto: str, texto: str) -> tuple[str, str]:
+    """
+    Determina qué tipo de promo es y el emoji correspondiente.
+    Retorna (categoria_label, emoji)
+    """
+    contenido = (asunto + " " + texto[:1500]).lower()
+
+    if any(k in contenido for k in ["nafta", "gasoil", "gas oil", "gnc", "combustible", "litro"]):
+        return "combustible", "⛽"
+    if any(k in contenido for k in ["lavadero", "car wash", "lavado"]):
+        return "lavadero", "🚿"
+    if any(k in contenido for k in ["shop", "tienda", "minimercado", "snack", "golosina",
+                                     "chocola", "bebida", "agua", "gaseosa"]):
+        return "tienda", "🛒"
+    if any(k in contenido for k in ["café", "cafe", "capuchino", "latte", "expreso",
+                                     "sanguchería", "sangucheria", "sanguche", "burger",
+                                     "hamburguesa", "combo", "yerba", "mate", "parada"]):
+        return "gastronomía", "🍔"
+    if any(k in contenido for k in ["puntos", "acumul", "club", "beneficio", "membership"]):
+        return "programa de puntos", "⭐"
+    return "estación de servicio", "🏪"
+
+
+def _extraer_tope(texto: str) -> str:
+    """
+    Busca el tope/límite de reintegro en TODO el texto incluyendo letra chica.
+    Patrones comunes en mails argentinos de bancos/wallets.
+    """
+    t = texto.lower()
+    patrones = [
+        r'tope\s+de\s+reintegro[:\s]+\$?\s*([\d\.,]+)',
+        r'tope\s+de\s+beneficio[:\s]+\$?\s*([\d\.,]+)',
+        r'tope[:\s]+\$?\s*([\d\.,]+)',
+        r'máximo\s+de\s+reintegro[:\s]+\$?\s*([\d\.,]+)',
+        r'maximo\s+de\s+reintegro[:\s]+\$?\s*([\d\.,]+)',
+        r'reintegro\s+máximo[:\s]+\$?\s*([\d\.,]+)',
+        r'reintegro\s+maximo[:\s]+\$?\s*([\d\.,]+)',
+        r'hasta\s+\$\s*([\d\.,]+)\s+de\s+reintegro',
+        r'hasta\s+\$\s*([\d\.,]+)\s+por\s+(mes|semana|día|dia)',
+        r'beneficio\s+máximo[:\s]+\$?\s*([\d\.,]+)',
+        r'beneficio\s+maximo[:\s]+\$?\s*([\d\.,]+)',
+        r'límite[:\s]+\$?\s*([\d\.,]+)',
+        r'limite[:\s]+\$?\s*([\d\.,]+)',
+    ]
+    for pat in patrones:
+        m = re.search(pat, t)
+        if m:
+            monto = m.group(1).replace(".", "").replace(",", "")
+            return f"${monto}"
+    return ""
+
+
 def _extraer_info(asunto: str, texto: str, remitente: str) -> dict:
-    """
-    Extrae campos clave de la promo.
-    Retorna dict con: descuento, marca, tarjeta, vigencia, resumen
-    """
+    """Extrae campos clave de la promo."""
     contenido = (asunto + " " + texto[:3000]).lower()
-    full = asunto + " " + texto[:3000]
+    full      = asunto + " " + texto[:3000]
+
+    # Tipo de promo
+    categoria, emoji_cat = _detectar_categoria(asunto, texto)
 
     # Descuento %
     pct = re.findall(r'(\d+)\s*%', full)
     descuento = f"{pct[0]}%" if pct else None
 
-    # Reintegro $ o tope
-    tope = re.findall(r'tope[:\s]+\$?\s*([\d\.]+)', contenido)
-    tope_str = f"(tope ${tope[0]})" if tope else ""
+    # Tope — busca en TODO el texto (letra chica incluida)
+    tope_str = _extraer_tope(texto)
 
-    # Marca de combustible
+    # Marca
     marca = None
     for m in ["ypf", "shell", "axion", "axión", "puma", "gulf", "petrobras"]:
         if m in contenido:
             marca = m.upper().replace("IÓN", "ION")
             break
 
-    # Tarjeta
+    # Tarjeta / wallet
     tarjeta = None
     for t in KW_TARJETA:
         if t in contenido:
@@ -190,23 +247,22 @@ def _extraer_info(asunto: str, texto: str, remitente: str) -> dict:
             break
 
     # Vigencia
-    fechas = re.findall(
-        r'(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)',
-        full
-    )
+    fechas  = re.findall(r'(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)', full)
     vigencia = " al ".join(fechas[:2]) if len(fechas) >= 2 else (fechas[0] if fechas else None)
 
     # Remitente limpio
     remitente_clean = re.sub(r'<.*?>', '', remitente).strip().strip('"')
 
     return {
+        "categoria": categoria,
+        "emoji_cat": emoji_cat,
         "descuento": descuento,
-        "tope": tope_str,
-        "marca": marca,
-        "tarjeta": tarjeta,
-        "vigencia": vigencia,
+        "tope":      tope_str,
+        "marca":     marca,
+        "tarjeta":   tarjeta,
+        "vigencia":  vigencia,
         "remitente": remitente_clean,
-        "asunto": asunto,
+        "asunto":    asunto,
     }
 
 
@@ -217,25 +273,40 @@ def _formatear_mensaje(info: dict, asunto: str) -> str:
             return ""
         return re.sub(r'([_\*\[\]\(\)~`>#+\-=|{}\.!\\])', r'\\\1', str(s))
 
-    lineas = ["🔥 *Nueva promo de combustible*\n"]
+    emoji = info.get("emoji_cat", "🏪")
+    cat   = info.get("categoria", "estación de servicio").title()
+
+    # Título dinámico según categoría
+    lineas = [f"🔥 *Promo en {esc(cat)}*\n"]
+
+    # Asunto como subtítulo (da contexto del mail)
+    asunto_corto = asunto[:60] + ("…" if len(asunto) > 60 else "")
+    lineas.append(f"{emoji} _{esc(asunto_corto)}_\n")
 
     if info["marca"]:
-        lineas.append(f"⛽ *{esc(info['marca'])}*")
+        lineas.append(f"🏪 *{esc(info['marca'])}*")
 
     if info["descuento"]:
         desc_txt = f"💸 *{esc(info['descuento'])} de descuento*"
         if info["tope"]:
-            desc_txt += f" {esc(info['tope'])}"
+            desc_txt += f" \\(tope {esc(info['tope'])}\\)"
         lineas.append(desc_txt)
+    elif info["tope"]:
+        lineas.append(f"💸 Reintegro hasta {esc(info['tope'])}")
 
     if info["tarjeta"]:
-        lineas.append(f"💳 Con tarjeta {esc(info['tarjeta'])}")
+        lineas.append(f"💳 Con {esc(info['tarjeta'])}")
 
     if info["vigencia"]:
         lineas.append(f"📅 Vigencia: {esc(info['vigencia'])}")
 
     lineas.append(f"\n_{esc(info['remitente'])}_")
-    lineas.append(f"\n[Ver estaciones en Tankear](https://tankear\\.com\\.ar)")
+
+    # Link relevante según categoría
+    if info.get("categoria") == "combustible":
+        lineas.append(f"\n[Ver estaciones en Tankear](https://tankear\\.com\\.ar)")
+    else:
+        lineas.append(f"\n[Encontrá la estación más cercana](https://tankear\\.com\\.ar)")
 
     return "\n".join(lineas)
 
@@ -305,22 +376,55 @@ def _marcar_procesado(mail_id: str, asunto: str, publicado: bool,
         log.warning(f"No se pudo guardar promo en DB: {e}")
 
 
+# ── Imagen del mail ───────────────────────────────────────────────────────────
+def _extraer_imagen(msg: email.message.Message) -> bytes | None:
+    """
+    Extrae la primera imagen inline o adjunta del mail (banner de la promo).
+    Preferencia: image/jpeg > image/png > image/gif
+    """
+    imagenes = []
+    for part in msg.walk():
+        ct = part.get_content_type()
+        if ct.startswith("image/"):
+            data = part.get_payload(decode=True)
+            if data and len(data) > 5000:  # descartar íconos tiny (<5KB)
+                imagenes.append((ct, data))
+    if not imagenes:
+        return None
+    # Preferir jpeg/png sobre gif
+    for ct, data in imagenes:
+        if "jpeg" in ct or "png" in ct:
+            return data
+    return imagenes[0][1]
+
+
 # ── Telegram ──────────────────────────────────────────────────────────────────
-async def _send_telegram(texto: str) -> bool:
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": CHANNEL,
-        "text": texto,
-        "parse_mode": "MarkdownV2",
-        "disable_web_page_preview": False,
-    }
-    async with httpx.AsyncClient(timeout=15) as client:
-        r = await client.post(url, json=payload)
+async def _send_telegram(texto: str, imagen: bytes = None) -> bool:
+    async with httpx.AsyncClient(timeout=20) as client:
+        if imagen:
+            # Postear como foto con caption
+            url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
+            files = {"photo": ("promo.jpg", imagen, "image/jpeg")}
+            data  = {"chat_id": CHANNEL, "caption": texto,
+                     "parse_mode": "MarkdownV2"}
+            r = await client.post(url, data=data, files=files)
+        else:
+            url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+            r = await client.post(url, json={
+                "chat_id": CHANNEL, "text": texto,
+                "parse_mode": "MarkdownV2",
+                "disable_web_page_preview": False,
+            })
+
         if r.status_code == 200:
-            log.info(f"✅ Publicado en {CHANNEL}")
+            log.info(f"✅ Publicado en {CHANNEL} {'con imagen' if imagen else 'sin imagen'}")
             return True
         else:
-            log.error(f"Telegram error {r.status_code}: {r.text[:200]}")
+            log.error(f"Telegram error {r.status_code}: {r.text[:300]}")
+            # Fallback: intentar sin imagen
+            if imagen:
+                log.info("  Reintentando sin imagen...")
+                return await _send_telegram(texto, imagen=None)
             return False
 
 
@@ -377,8 +481,11 @@ async def main():
 
             log.info("  → ¡Es promo! Publicando...")
             mensaje = _formatear_mensaje(info, asunto)
+            imagen  = _extraer_imagen(msg)
+            if imagen:
+                log.info(f"  → Imagen encontrada ({len(imagen)//1024}KB)")
 
-            ok = await _send_telegram(mensaje)
+            ok = await _send_telegram(mensaje, imagen)
             _marcar_procesado(mail_id, asunto, ok, info, mensaje)
             imap.store(mid, "+FLAGS", "\\Seen")
 
