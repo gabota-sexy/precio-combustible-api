@@ -1,0 +1,15 @@
+[Unit]
+Description=Tankear — Detector de promos de combustible (Gmail)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/var/www/tankear/api
+ExecStart=/var/www/tankear/venv/bin/python3 /var/www/tankear/api/promo_detector.py
+Environment=PROMO_GMAIL_USER=abuelaeliabarbieri@gmail.com
+Environment=PROMO_GMAIL_PASS=jgmtxlrknklunrso
+Environment=DB_PATH=/var/www/tankear/data/tankear.db
+StandardOutput=journal
+StandardError=journal
