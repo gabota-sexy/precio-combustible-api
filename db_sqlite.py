@@ -60,6 +60,31 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_est_prov ON estaciones(provincia);
         CREATE INDEX IF NOT EXISTS idx_est_loc  ON estaciones(localidad);
         CREATE INDEX IF NOT EXISTS idx_est_prod ON estaciones(producto);
+
+        CREATE TABLE IF NOT EXISTS telegram_subscribers (
+            chat_id     INTEGER PRIMARY KEY,
+            username    TEXT,
+            first_name  TEXT,
+            zona        TEXT,
+            provincia   TEXT,
+            contacto    TEXT,
+            activo      INTEGER DEFAULT 1,
+            created_at  TEXT DEFAULT (datetime('now')),
+            updated_at  TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS telegram_messages (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id     INTEGER,
+            username    TEXT,
+            first_name  TEXT,
+            text        TEXT,
+            intencion   TEXT,
+            score_lead  INTEGER DEFAULT 0,
+            created_at  TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_tgmsg_chat ON telegram_messages(chat_id);
+        CREATE INDEX IF NOT EXISTS idx_tgmsg_int  ON telegram_messages(intencion);
     """)
     conn.commit()
     conn.close()
@@ -204,6 +229,89 @@ def get_estaciones(provincia=None, localidad=None, producto=None, limit=500) -> 
     rows = conn.execute(q, params).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+# ─── Telegram subscribers ────────────────────────────────────────────────────
+
+def save_telegram_subscriber(chat_id: int, username: str = "", first_name: str = "",
+                              zona: str = "", provincia: str = "", contacto: str = ""):
+    conn = _conn()
+    conn.execute("""
+        INSERT INTO telegram_subscribers (chat_id, username, first_name, zona, provincia, contacto, activo, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, 1, datetime('now'))
+        ON CONFLICT(chat_id) DO UPDATE SET
+            username=excluded.username, first_name=excluded.first_name,
+            zona=CASE WHEN excluded.zona != '' THEN excluded.zona ELSE zona END,
+            provincia=CASE WHEN excluded.provincia != '' THEN excluded.provincia ELSE provincia END,
+            contacto=CASE WHEN excluded.contacto != '' THEN excluded.contacto ELSE contacto END,
+            activo=1, updated_at=datetime('now')
+    """, (chat_id, username or "", first_name or "", zona or "", provincia or "", contacto or ""))
+    conn.commit()
+    conn.close()
+
+
+def get_telegram_subscribers(activo: bool = True) -> list:
+    conn = _conn()
+    rows = conn.execute(
+        "SELECT * FROM telegram_subscribers WHERE activo = ?",
+        (1 if activo else 0,)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def count_telegram_subscribers() -> int:
+    conn = _conn()
+    row = conn.execute("SELECT COUNT(*) FROM telegram_subscribers WHERE activo=1").fetchone()
+    conn.close()
+    return row[0] if row else 0
+
+
+# ─── Telegram message log ─────────────────────────────────────────────────────
+
+def log_telegram_message(chat_id: int, username: str, first_name: str,
+                          text: str, intencion: str, score_lead: int = 0):
+    conn = _conn()
+    conn.execute("""
+        INSERT INTO telegram_messages (chat_id, username, first_name, text, intencion, score_lead)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (chat_id, username or "", first_name or "", text or "", intencion or "", score_lead))
+    conn.commit()
+    conn.close()
+
+
+def get_telegram_messages(limit: int = 200, intencion: str = None) -> list:
+    conn = _conn()
+    if intencion:
+        rows = conn.execute(
+            "SELECT * FROM telegram_messages WHERE intencion=? ORDER BY created_at DESC LIMIT ?",
+            (intencion, limit)
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM telegram_messages ORDER BY created_at DESC LIMIT ?",
+            (limit,)
+        ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_telegram_stats() -> dict:
+    conn = _conn()
+    total = conn.execute("SELECT COUNT(*) FROM telegram_messages").fetchone()[0]
+    by_intent = conn.execute("""
+        SELECT intencion, COUNT(*) as n FROM telegram_messages
+        GROUP BY intencion ORDER BY n DESC
+    """).fetchall()
+    hot_leads = conn.execute("""
+        SELECT COUNT(DISTINCT chat_id) FROM telegram_messages WHERE score_lead >= 2
+    """).fetchone()[0]
+    conn.close()
+    return {
+        "total_messages": total,
+        "hot_leads": hot_leads,
+        "by_intent": [dict(r) for r in by_intent],
+    }
 
 
 def save_estaciones(records: list):

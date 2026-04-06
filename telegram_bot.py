@@ -19,8 +19,19 @@ import asyncio
 import logging
 import os
 import re
+import sys
 import httpx
 from datetime import datetime
+
+# db_sqlite está en el mismo directorio en producción
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    import db_sqlite as db
+    db.init_db()
+    _DB_OK = True
+except Exception as _e:
+    _DB_OK = False
+    logging.getLogger("tankear_bot").warning(f"db_sqlite no disponible: {_e}")
 
 from telegram import (
     Update,
@@ -365,6 +376,21 @@ async def recibir_zona(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         chat_id = chat_id,
     )
 
+    # Guardar en SQLite para poder enviar alertas Telegram push
+    if _DB_OK:
+        try:
+            user = update.effective_user
+            db.save_telegram_subscriber(
+                chat_id    = chat_id,
+                username   = user.username or "",
+                first_name = user.first_name or "",
+                zona       = zona,
+                provincia  = zona,  # refinamos con geolocalización si hay coords
+                contacto   = contacto,
+            )
+        except Exception as e:
+            logger.warning(f"save_subscriber error: {e}")
+
     if ok:
         await update.message.reply_text(
             f"✅ *¡Listo\\!* Te suscribiste a las alertas de Tankear\\.\n\n"
@@ -394,6 +420,19 @@ async def saltar_zona(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         zona    = "",
         chat_id = chat_id,
     )
+
+    # Guardar en SQLite (sin zona aún)
+    if _DB_OK:
+        try:
+            user = update.effective_user
+            db.save_telegram_subscriber(
+                chat_id    = chat_id,
+                username   = user.username or "",
+                first_name = user.first_name or "",
+                contacto   = contacto,
+            )
+        except Exception as e:
+            logger.warning(f"save_subscriber error: {e}")
 
     msg = "✅ *¡Listo\\!* Suscripto a alertas de Tankear\\." if ok else "⚠️ Error al registrarte\\. Intentá con /suscribir"
     await update.message.reply_text(
@@ -438,13 +477,53 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 # ── Fallback: mensajes de texto fuera de conversación ─────────────────────────
 
+def _detectar_intencion(txt: str) -> tuple[str, int]:
+    """Devuelve (intencion, score_lead). Score >= 2 = hot lead."""
+    t = txt.lower()
+    if any(w in t for w in ["seguro", "cotizar", "cotizador", "póliza", "poliza", "cobertura", "aseguradora"]):
+        return "seguro", 3
+    if any(w in t for w in ["nafta", "súper", "super 95", "infinia", "v-power", "combustible"]):
+        return "nafta", 1
+    if any(w in t for w in ["gasoil", "diesel", "gasoleo", "gas oil"]):
+        return "gasoil", 1
+    if any(w in t for w in ["gnc", "gas natural"]):
+        return "gnc", 1
+    if any(w in t for w in ["precio", "cuánto", "cuanto", "cuesta"]):
+        return "precio", 1
+    if any(w in t for w in ["dolar", "dólar", "blue", "cambio", "divisa"]):
+        return "dolar", 1
+    if any(w in t for w in ["viaje", "ruta", "kilómetro", "km", "consumo"]):
+        return "viaje", 2
+    return "otro", 0
+
+
+def _log_mensaje(update: Update, intencion: str, score: int):
+    """Loguea el mensaje en SQLite si la DB está disponible."""
+    if not _DB_OK:
+        return
+    try:
+        user = update.effective_user
+        db.log_telegram_message(
+            chat_id    = user.id,
+            username   = user.username or "",
+            first_name = user.first_name or "",
+            text       = update.message.text or "",
+            intencion  = intencion,
+            score_lead = score,
+        )
+    except Exception as e:
+        logger.debug(f"log_mensaje error: {e}")
+
+
 async def handle_texto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    txt = update.message.text.lower()
-    if any(w in txt for w in ["nafta", "precio", "combustible", "gasoil"]):
+    intencion, score = _detectar_intencion(update.message.text or "")
+    _log_mensaje(update, intencion, score)
+
+    if intencion in ("nafta", "gasoil", "gnc", "precio"):
         await cmd_precios(update, context)
-    elif any(w in txt for w in ["dolar", "dólar", "blue", "cambio"]):
+    elif intencion == "dolar":
         await cmd_dolar(update, context)
-    elif any(w in txt for w in ["seguro", "cotizar", "cotizador", "auto"]):
+    elif intencion in ("seguro", "viaje"):
         await cmd_cotizar(update, context)
     else:
         await update.message.reply_text(

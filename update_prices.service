@@ -1,0 +1,13 @@
+[Unit]
+Description=Tankear — Actualizar precios y notificar suscriptores
+After=network.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/var/www/tankear/api
+Environment=TELEGRAM_BOT_TOKEN=8673787872:AAGuQs_0-geYNII9dcwWaEu5eZ7I0J6FNW8
+Environment=DB_PATH=/var/www/tankear/data/tankear.db
+ExecStart=/var/www/tankear/venv/bin/python3 /var/www/tankear/api/update_prices.py
+StandardOutput=append:/var/log/tankear-update.log
+StandardError=append:/var/log/tankear-update.log

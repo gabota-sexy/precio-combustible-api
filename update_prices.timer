@@ -1,0 +1,10 @@
+[Unit]
+Description=Tankear — Timer diario para actualizar precios (09:00 UTC = 06:00 ART)
+Requires=update_prices.service
+
+[Timer]
+OnCalendar=*-*-* 09:00:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target
