@@ -283,59 +283,92 @@ def _extraer_info(asunto: str, texto: str, remitente: str) -> dict:
     remitente_clean = re.sub(r'<.*?>', '', remitente).strip().strip('"')
 
     return {
-        "categoria": categoria,
-        "emoji_cat": emoji_cat,
-        "descuento": descuento,
-        "tope":      tope_str,
-        "marca":     marca,
-        "tarjeta":   tarjeta,
-        "vigencia":  vigencia,
-        "remitente": remitente_clean,
-        "asunto":    asunto,
+        "categoria":       categoria,
+        "emoji_cat":       emoji_cat,
+        "descuento":       descuento,
+        "tope":            tope_str,
+        "marca":           marca,
+        "tarjeta":         tarjeta,
+        "vigencia":        vigencia,
+        "remitente":       remitente_clean,
+        "asunto":          asunto,
+        "_texto_completo": texto,   # para detectar banco secundario en wallets
     }
 
 
+def _extraer_banco_secundario(texto: str, tarjeta_principal: str) -> str:
+    """
+    Cuando la wallet principal es Modo/Uala/MercadoPago, busca si la promo
+    es válida solo para ciertos bancos (mencionados en la letra chica).
+    """
+    BANCOS = ["nación", "nacion", "galicia", "bbva", "santander", "macro",
+              "supervielle", "provincia", "ciudad", "patagonia", "itaú", "itau"]
+    WALLETS = ["modo", "mercado pago", "uala", "ualá"]
+
+    if tarjeta_principal.lower() not in WALLETS:
+        return ""
+
+    t = texto.lower()
+    encontrados = [b.title() for b in BANCOS if b in t]
+    if not encontrados:
+        return ""
+    # Si encontró varios bancos, es promo abierta (no mencionar)
+    if len(encontrados) >= 4:
+        return ""
+    return ", ".join(encontrados[:2])
+
+
 def _formatear_mensaje(info: dict, asunto: str) -> str:
-    """Genera el texto del mensaje Telegram con MarkdownV2."""
+    """
+    Genera un mensaje legible, no una lista de campos.
+    Ejemplo: "15% de reintegro en PUMA pagando con Modo (Banco Nación)"
+    """
     def esc(s):
         if not s:
             return ""
         return re.sub(r'([_\*\[\]\(\)~`>#+\-=|{}\.!\\])', r'\\\1', str(s))
 
     emoji = info.get("emoji_cat", "🏪")
-    cat   = info.get("categoria", "estación de servicio").title()
+    marca    = info.get("marca", "")
+    descuento = info.get("descuento", "")
+    tope     = info.get("tope", "")
+    tarjeta  = info.get("tarjeta", "")
+    vigencia = info.get("vigencia", "")
+    categoria = info.get("categoria", "")
 
-    # Título dinámico según categoría
-    lineas = [f"🔥 *Promo en {esc(cat)}*\n"]
+    # Banco secundario (ej: Modo con Banco Nación)
+    banco_sec = _extraer_banco_secundario(info.get("_texto_completo", ""), tarjeta)
 
-    # Asunto como subtítulo (da contexto del mail)
-    asunto_corto = asunto[:60] + ("…" if len(asunto) > 60 else "")
-    lineas.append(f"{emoji} _{esc(asunto_corto)}_\n")
+    # ── Línea principal: "[descuento] en [marca] pagando con [tarjeta]" ──────
+    partes_titulo = []
+    if descuento:
+        partes_titulo.append(f"*{esc(descuento)} de reintegro*")
+    if marca:
+        partes_titulo.append(f"en *{esc(marca)}*")
+    if tarjeta:
+        pago_txt = f"pagando con *{esc(tarjeta)}*"
+        if banco_sec:
+            pago_txt += f" \\({esc(banco_sec)}\\)"
+        partes_titulo.append(pago_txt)
 
-    if info["marca"]:
-        lineas.append(f"🏪 *{esc(info['marca'])}*")
-
-    if info["descuento"]:
-        desc_txt = f"💸 *{esc(info['descuento'])} de descuento*"
-        if info["tope"]:
-            desc_txt += f" \\(tope {esc(info['tope'])}\\)"
-        lineas.append(desc_txt)
-    elif info["tope"]:
-        lineas.append(f"💸 Reintegro hasta {esc(info['tope'])}")
-
-    if info["tarjeta"]:
-        lineas.append(f"💳 Con {esc(info['tarjeta'])}")
-
-    if info["vigencia"]:
-        lineas.append(f"📅 Vigencia: {esc(info['vigencia'])}")
-
-    lineas.append(f"\n_{esc(info['remitente'])}_")
-
-    # Link relevante según categoría
-    if info.get("categoria") == "combustible":
-        lineas.append(f"\n[Ver estaciones en Tankear](https://tankear\\.com\\.ar)")
+    if partes_titulo:
+        titulo = f"{emoji} " + " ".join(partes_titulo)
     else:
-        lineas.append(f"\n[Encontrá la estación más cercana](https://tankear\\.com\\.ar)")
+        # Fallback al asunto del mail
+        asunto_corto = asunto[:55] + ("…" if len(asunto) > 55 else "")
+        titulo = f"{emoji} *{esc(asunto_corto)}*"
+
+    lineas = ["🔥 *Nueva promo*\n", titulo]
+
+    # Tope si existe
+    if tope:
+        lineas.append(f"_Tope de reintegro: {esc(tope)}_")
+
+    # Vigencia
+    if vigencia:
+        lineas.append(f"📅 Válido hasta: {esc(vigencia)}")
+
+    lineas.append(f"\n[Ver estaciones {esc(marca) if marca else 'en Tankear'}](https://tankear\\.com\\.ar)")
 
     return "\n".join(lineas)
 
