@@ -239,16 +239,45 @@ def _extraer_info(asunto: str, texto: str, remitente: str) -> dict:
             marca = m.upper().replace("IÓN", "ION")
             break
 
-    # Tarjeta / wallet
+    # Tarjeta / wallet — priorizar remitente sobre cuerpo del mail
+    rem_lower = remitente.lower()
+    REMITENTE_A_TARJETA = {
+        "naranjax.com":      "Naranja X",
+        "naranja.com.ar":    "Naranja",
+        "modo.com.ar":       "Modo",
+        "mercadopago.com":   "Mercado Pago",
+        "uala.com.ar":       "Ualá",
+        "bbva.com.ar":       "BBVA",
+        "galicia.com.ar":    "Galicia",
+        "santander.com.ar":  "Santander",
+        "macro.com.ar":      "Macro",
+        "hsbc.com.ar":       "HSBC",
+    }
     tarjeta = None
-    for t in KW_TARJETA:
-        if t in contenido:
-            tarjeta = t.title()
+    for dominio, nombre in REMITENTE_A_TARJETA.items():
+        if dominio in rem_lower:
+            tarjeta = nombre
             break
+    # Si no se detectó por remitente, buscar en el cuerpo
+    if not tarjeta:
+        for t in KW_TARJETA:
+            if t in contenido:
+                tarjeta = t.title()
+                break
 
-    # Vigencia
-    fechas  = re.findall(r'(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)', full)
-    vigencia = " al ".join(fechas[:2]) if len(fechas) >= 2 else (fechas[0] if fechas else None)
+    # Vigencia — solo fechas del año actual o siguiente (descartar históricas)
+    año_actual = datetime.now().year
+    fechas_raw = re.findall(r'(\d{1,2}[\/\-]\d{1,2}[\/\-](\d{2,4}))', full)
+    fechas_validas = []
+    for fecha_str, año_str in fechas_raw:
+        año = int(año_str) if len(año_str) == 4 else 2000 + int(año_str)
+        if año >= año_actual:
+            fechas_validas.append(fecha_str)
+    # También fechas sin año (dd/mm) las aceptamos
+    if not fechas_validas:
+        fechas_sin_año = re.findall(r'(\d{1,2}[\/\-]\d{1,2})(?![\/\-]\d)', full)
+        fechas_validas = fechas_sin_año
+    vigencia = " al ".join(fechas_validas[:2]) if len(fechas_validas) >= 2 else (fechas_validas[0] if fechas_validas else None)
 
     # Remitente limpio
     remitente_clean = re.sub(r'<.*?>', '', remitente).strip().strip('"')
