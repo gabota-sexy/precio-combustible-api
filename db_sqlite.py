@@ -170,8 +170,15 @@ def estaciones_age_hours() -> Optional[float]:
 def get_estaciones(provincia: Optional[str] = None,
                    localidad: Optional[str] = None,
                    producto: Optional[str] = None,
-                   limit: int = 5000) -> list:
-    """Lee estaciones del cache con filtros opcionales."""
+                   limit: int = 5000,
+                   solo_recientes: bool = False) -> list:
+    """
+    Lee estaciones del cache con filtros opcionales.
+    solo_recientes=True → solo registros con fecha_vigencia de las últimas 72h
+                          (para mostrar precios confiables).
+    solo_recientes=False → todos los registros, incluyendo los viejos
+                           (para mostrar ubicaciones en el mapa).
+    """
     conn = _conn()
     q = """
         SELECT empresa, bandera, cuit, direccion, localidad, provincia, region,
@@ -179,6 +186,9 @@ def get_estaciones(provincia: Optional[str] = None,
         FROM estaciones WHERE 1=1
     """
     params: list = []
+    if solo_recientes:
+        q += """ AND fecha_vigencia >= datetime(
+                    (SELECT MAX(fecha_vigencia) FROM estaciones), '-72 hours')"""
     if provincia:
         q += " AND UPPER(provincia) = ?"
         params.append(provincia.upper())
