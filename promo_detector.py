@@ -406,20 +406,30 @@ def _formatear_mensaje(info: dict, asunto: str) -> str:
         partes_titulo.append(f"*{esc(descuento)} de reintegro*")
     if marca:
         partes_titulo.append(f"en *{esc(marca)}*")
-    if tarjeta:
+    # No agregar tarjeta si es la misma que la marca (evita "en YPF pagando con YPF")
+    if tarjeta and tarjeta.upper() != (marca or "").upper():
         pago_txt = f"pagando con *{esc(tarjeta)}*"
         if banco_sec:
             pago_txt += f" \\({esc(banco_sec)}\\)"
         partes_titulo.append(pago_txt)
 
-    if partes_titulo:
+    # Si no hay descuento concreto, usar el asunto como descripción principal
+    # (el asunto suele describir la promo mejor que los campos extraídos)
+    if not descuento:
+        asunto_corto = asunto[:60] + ("…" if len(asunto) > 60 else "")
+        titulo = f"{emoji} *{esc(asunto_corto)}*"
+        lineas = ["🔥 *Nueva promo*\n", titulo]
+        # Agregar marca/tarjeta como línea secundaria si hay info útil
+        if partes_titulo:
+            lineas.append(" ".join(partes_titulo))
+    elif partes_titulo:
         titulo = f"{emoji} " + " ".join(partes_titulo)
+        lineas = ["🔥 *Nueva promo*\n", titulo]
     else:
         # Fallback al asunto del mail
         asunto_corto = asunto[:55] + ("…" if len(asunto) > 55 else "")
         titulo = f"{emoji} *{esc(asunto_corto)}*"
-
-    lineas = ["🔥 *Nueva promo*\n", titulo]
+        lineas = ["🔥 *Nueva promo*\n", titulo]
 
     # Tope si existe
     if tope:
