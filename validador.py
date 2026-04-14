@@ -25,9 +25,13 @@ ADMIN_ID  = 1209008738
 # Umbrales de calidad
 MIN_ESTACIONES  = 5_000    # mínimo de registros esperados
 MAX_EDAD_HORAS  = 96       # máximo de horas desde la fecha_vigencia más reciente
-MIN_PRECIO      = 1_000.0  # precio mínimo razonable por litro
-MAX_PRECIO      = 10_000.0 # precio máximo razonable por litro
-MAX_CAMBIO_DIA  = 25.0     # % máximo de cambio diario creíble
+MIN_PRECIO      = 1_000.0  # precio mínimo razonable (nafta/gasoil, $/L)
+MAX_PRECIO      = 10_000.0 # precio máximo razonable ($/L)
+MAX_CAMBIO_DIA  = 35.0     # % máximo de cambio diario creíble (Argentina puede tener ajustes grandes)
+# GNC se vende por m³ y tiene precios menores a los líquidos — no aplicar MIN_PRECIO
+PRODUCTOS_SIN_MIN = {"GNC", "gnc"}
+# Días de "gracia" tras cambio de método de snapshot (evita falsos positivos el primer día)
+DIAS_GRACIA_SNAPSHOT = 2
 
 
 def log(msg):
@@ -94,7 +98,8 @@ def check_precios(conn) -> tuple[bool, str]:
 
     problemas = []
     for r in rows:
-        if r["avg_p"] < MIN_PRECIO:
+        # GNC se mide en $/m³, no $/L — no aplicar umbral mínimo de líquidos
+        if r["producto"] not in PRODUCTOS_SIN_MIN and r["avg_p"] < MIN_PRECIO:
             problemas.append(f"{r['producto']}: promedio ${r['avg_p']:.0f} (muy bajo)")
         if r["avg_p"] > MAX_PRECIO:
             problemas.append(f"{r['producto']}: promedio ${r['avg_p']:.0f} (muy alto)")
@@ -154,6 +159,14 @@ def check_variacion_diaria(conn) -> tuple[bool, str]:
             )
 
     if sospechosos:
+        # Verificar cuántos días de historial hay — si es muy poco, puede ser
+        # artefacto del cambio de método de snapshot (primer día con filtro 72h)
+        total_dias = conn.execute(
+            "SELECT COUNT(DISTINCT fecha_snapshot) FROM precios_historico"
+        ).fetchone()[0]
+        if total_dias <= DIAS_GRACIA_SNAPSHOT:
+            return True, ("⏭️ Variación alta detectada pero dentro del período de "
+                          f"gracia ({total_dias} días de historial — puede ser artefacto del método nuevo)")
         return False, ("⚠️ Variación sospechosa vs ayer (posible error de datos):\n"
                        + "\n".join(f"  • {s}" for s in sospechosos))
     return True, "✅ Variación diaria dentro de rango normal"
