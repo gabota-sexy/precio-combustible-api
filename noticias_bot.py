@@ -92,13 +92,26 @@ def init_tabla():
     conn.close()
 
 
-def ya_enviada(url: str) -> bool:
+def ya_enviada(url: str, titulo: str = "") -> bool:
     conn = _conn()
+    # Chequear por URL exacta
     row = conn.execute(
         "SELECT id FROM noticias_enviadas WHERE url = ?", (url,)
     ).fetchone()
+    if row:
+        conn.close()
+        return True
+    # Chequear por título (misma nota en distintos feeds/URLs)
+    if titulo:
+        titulo_norm = titulo.strip().lower()[:120]
+        row = conn.execute(
+            "SELECT id FROM noticias_enviadas WHERE lower(titulo) = ?", (titulo_norm,)
+        ).fetchone()
+        if row:
+            conn.close()
+            return True
     conn.close()
-    return row is not None
+    return False
 
 
 def marcar_enviada(url: str, titulo: str, fuente: str, puntaje: int):
@@ -254,7 +267,7 @@ def main():
     log(f"Total items: {len(todas)}")
 
     # Filtrar por puntaje mínimo y no enviadas
-    candidatas = [n for n in todas if n["puntaje"] >= 2 and not ya_enviada(n["url"])]
+    candidatas = [n for n in todas if n["puntaje"] >= 2 and not ya_enviada(n["url"], n["titulo"])]
     log(f"Candidatas (score>=2, no enviadas): {len(candidatas)}")
 
     if not candidatas:
