@@ -4,7 +4,7 @@
   <!-- Páginas principales -->
   <url>
     <loc>https://tankear.com.ar/</loc>
-    <changefreq>daily</changefreq>
+    <changefreq>hourly</changefreq>
     <priority>1.0</priority>
   </url>
   <url>
@@ -13,144 +13,149 @@
     <priority>0.9</priority>
   </url>
   <url>
-    <loc>https://tankear.com.ar/viaje</loc>
-    <changefreq>monthly</changefreq>
-    <priority>0.8</priority>
-  </url>
-  <url>
     <loc>https://tankear.com.ar/noticias</loc>
-    <changefreq>daily</changefreq>
+    <changefreq>hourly</changefreq>
     <priority>0.8</priority>
-  </url>
-  <url>
-    <loc>https://tankear.com.ar/dolar</loc>
-    <changefreq>daily</changefreq>
-    <priority>0.7</priority>
   </url>
   <url>
     <loc>https://tankear.com.ar/cotizador</loc>
     <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://tankear.com.ar/viaje</loc>
+    <changefreq>monthly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://tankear.com.ar/surtidores</loc>
+    <changefreq>daily</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://tankear.com.ar/dolar</loc>
+    <changefreq>daily</changefreq>
     <priority>0.6</priority>
   </url>
 
-  <!-- Precios por provincia (24 provincias argentinas) -->
+  <!-- Precios por provincia — URLs slugificadas (minúsculas, guiones) -->
   <url>
-    <loc>https://tankear.com.ar/precios/Buenos%20Aires</loc>
+    <loc>https://tankear.com.ar/precios/buenos-aires</loc>
     <changefreq>daily</changefreq>
     <priority>0.9</priority>
   </url>
   <url>
-    <loc>https://tankear.com.ar/precios/CABA</loc>
+    <loc>https://tankear.com.ar/precios/ciudad-autonoma-de-buenos-aires</loc>
     <changefreq>daily</changefreq>
     <priority>0.9</priority>
   </url>
   <url>
-    <loc>https://tankear.com.ar/precios/C%C3%B3rdoba</loc>
+    <loc>https://tankear.com.ar/precios/cordoba</loc>
+    <changefreq>daily</changefreq>
+    <priority>0.9</priority>
+  </url>
+  <url>
+    <loc>https://tankear.com.ar/precios/santa-fe</loc>
     <changefreq>daily</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
-    <loc>https://tankear.com.ar/precios/Santa%20Fe</loc>
+    <loc>https://tankear.com.ar/precios/mendoza</loc>
     <changefreq>daily</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
-    <loc>https://tankear.com.ar/precios/Mendoza</loc>
+    <loc>https://tankear.com.ar/precios/tucuman</loc>
     <changefreq>daily</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
-    <loc>https://tankear.com.ar/precios/Tucum%C3%A1n</loc>
+    <loc>https://tankear.com.ar/precios/salta</loc>
     <changefreq>daily</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://tankear.com.ar/precios/Entre%20R%C3%ADos</loc>
+    <loc>https://tankear.com.ar/precios/entre-rios</loc>
     <changefreq>daily</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://tankear.com.ar/precios/Salta</loc>
+    <loc>https://tankear.com.ar/precios/corrientes</loc>
     <changefreq>daily</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://tankear.com.ar/precios/Misiones</loc>
+    <loc>https://tankear.com.ar/precios/misiones</loc>
     <changefreq>daily</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://tankear.com.ar/precios/Chaco</loc>
+    <loc>https://tankear.com.ar/precios/chaco</loc>
     <changefreq>daily</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://tankear.com.ar/precios/Corrientes</loc>
+    <loc>https://tankear.com.ar/precios/formosa</loc>
     <changefreq>daily</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://tankear.com.ar/precios/Santiago%20del%20Estero</loc>
+    <loc>https://tankear.com.ar/precios/santiago-del-estero</loc>
     <changefreq>daily</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://tankear.com.ar/precios/San%20Juan</loc>
+    <loc>https://tankear.com.ar/precios/san-juan</loc>
     <changefreq>daily</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://tankear.com.ar/precios/Jujuy</loc>
+    <loc>https://tankear.com.ar/precios/jujuy</loc>
     <changefreq>daily</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://tankear.com.ar/precios/R%C3%ADo%20Negro</loc>
+    <loc>https://tankear.com.ar/precios/rio-negro</loc>
     <changefreq>daily</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://tankear.com.ar/precios/Neuqu%C3%A9n</loc>
+    <loc>https://tankear.com.ar/precios/neuquen</loc>
     <changefreq>daily</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://tankear.com.ar/precios/Formosa</loc>
+    <loc>https://tankear.com.ar/precios/la-pampa</loc>
+    <changefreq>daily</changefreq>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://tankear.com.ar/precios/chubut</loc>
     <changefreq>daily</changefreq>
     <priority>0.5</priority>
   </url>
   <url>
-    <loc>https://tankear.com.ar/precios/Chubut</loc>
+    <loc>https://tankear.com.ar/precios/san-luis</loc>
     <changefreq>daily</changefreq>
     <priority>0.5</priority>
   </url>
   <url>
-    <loc>https://tankear.com.ar/precios/San%20Luis</loc>
+    <loc>https://tankear.com.ar/precios/catamarca</loc>
     <changefreq>daily</changefreq>
     <priority>0.5</priority>
   </url>
   <url>
-    <loc>https://tankear.com.ar/precios/Catamarca</loc>
+    <loc>https://tankear.com.ar/precios/la-rioja</loc>
     <changefreq>daily</changefreq>
     <priority>0.5</priority>
   </url>
   <url>
-    <loc>https://tankear.com.ar/precios/La%20Rioja</loc>
+    <loc>https://tankear.com.ar/precios/santa-cruz</loc>
     <changefreq>daily</changefreq>
     <priority>0.5</priority>
   </url>
   <url>
-    <loc>https://tankear.com.ar/precios/La%20Pampa</loc>
-    <changefreq>daily</changefreq>
-    <priority>0.5</priority>
-  </url>
-  <url>
-    <loc>https://tankear.com.ar/precios/Santa%20Cruz</loc>
-    <changefreq>daily</changefreq>
-    <priority>0.5</priority>
-  </url>
-  <url>
-    <loc>https://tankear.com.ar/precios/Tierra%20del%20Fuego</loc>
+    <loc>https://tankear.com.ar/precios/tierra-del-fuego</loc>
     <changefreq>daily</changefreq>
     <priority>0.5</priority>
   </url>

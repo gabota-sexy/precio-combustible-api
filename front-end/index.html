@@ -2,34 +2,74 @@
 <html lang="es-AR">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <link rel="icon" type="image/png" href="/favicon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 
-    <!-- Básico SEO -->
-    <title>Tankear — Nafta más barata cerca tuyo</title>
-    <meta name="description" content="Compará precios de nafta hoy en Argentina. YPF, Shell, Axion, Puma y más. Encontrá la estación más barata cerca tuyo. Actualizado diariamente." />
-    <meta name="keywords" content="precio nafta argentina, nafta más barata, precio nafta hoy, comparar precios nafta, nafta cerca mío, precio gasoil argentina, YPF precio nafta, Shell nafta precio" />
-    <meta name="robots" content="index, follow" />
+    <!-- SEO Principal -->
+    <title>Precio nafta hoy Argentina — Compará estaciones cerca tuyo | Tankear</title>
+    <meta name="description" content="Compará precios de nafta y gasoil hoy en más de 36.000 estaciones de Argentina. YPF, Shell, Axion, Puma, Gulf. Encontrá la más barata cerca tuyo. Gratis y actualizado diariamente." />
+    <meta name="keywords" content="precio nafta hoy argentina, nafta más barata cerca mío, comparar precios nafta, precio gasoil argentina, estaciones de servicio baratas, YPF nafta precio, Shell nafta hoy, Axion precio nafta, precio combustible argentina" />
+    <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large" />
     <meta name="theme-color" content="#0f172a" />
+    <meta name="author" content="Tankear" />
     <link rel="canonical" href="https://tankear.com.ar/" />
     <link rel="sitemap" type="application/xml" href="/sitemap.xml" />
 
+    <!-- Geo — Argentina -->
+    <meta name="geo.region" content="AR" />
+    <meta name="geo.country" content="Argentina" />
+    <meta name="language" content="Spanish" />
+
     <!-- Open Graph (WhatsApp, Facebook, LinkedIn) -->
-    <meta property="og:type"        content="website" />
-    <meta property="og:site_name"   content="Tankear" />
-    <meta property="og:title"       content="Tankear — Nafta más barata cerca tuyo" />
-    <meta property="og:description" content="Compará precios de nafta y gasoil en tiempo real. YPF, Shell, Axion, Puma y más en toda Argentina." />
-    <meta property="og:url"         content="https://tankear.com.ar/" />
-    <meta property="og:image"       content="https://tankear.com.ar/og-image.png" />
+    <meta property="og:type"         content="website" />
+    <meta property="og:site_name"    content="Tankear" />
+    <meta property="og:title"        content="Precio nafta hoy — Compará estaciones cerca tuyo | Tankear" />
+    <meta property="og:description"  content="Compará precios de nafta y gasoil en más de 36.000 estaciones de Argentina. YPF, Shell, Axion, Puma, Gulf. Gratis y actualizado diariamente." />
+    <meta property="og:url"          content="https://tankear.com.ar/" />
+    <meta property="og:image"        content="https://tankear.com.ar/og-image.png" />
     <meta property="og:image:width"  content="1200" />
     <meta property="og:image:height" content="630" />
-    <meta property="og:locale"      content="es_AR" />
+    <meta property="og:image:alt"    content="Tankear — Compará precios de nafta en Argentina" />
+    <meta property="og:locale"       content="es_AR" />
 
-    <!-- Twitter Card -->
+    <!-- Twitter / X Card -->
     <meta name="twitter:card"        content="summary_large_image" />
-    <meta name="twitter:title"       content="Tankear — Nafta más barata cerca tuyo" />
-    <meta name="twitter:description" content="Compará precios de nafta y gasoil en Argentina. Encontrá la estación más barata cerca tuyo." />
+    <meta name="twitter:site"        content="@tankear_ar" />
+    <meta name="twitter:title"       content="Precio nafta hoy — Compará estaciones cerca tuyo | Tankear" />
+    <meta name="twitter:description" content="Compará precios de nafta y gasoil en Argentina. Más de 36.000 estaciones. YPF, Shell, Axion, Puma y más." />
     <meta name="twitter:image"       content="https://tankear.com.ar/og-image.png" />
+
+    <!-- Schema.org WebSite (habilita sitelinks search box en Google) -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "WebSite",
+      "name": "Tankear",
+      "url": "https://tankear.com.ar",
+      "description": "Comparador de precios de nafta y gasoil en Argentina",
+      "inLanguage": "es-AR",
+      "potentialAction": {
+        "@type": "SearchAction",
+        "target": {
+          "@type": "EntryPoint",
+          "urlTemplate": "https://tankear.com.ar/?q={search_term_string}"
+        },
+        "query-input": "required name=search_term_string"
+      }
+    }
+    </script>
+
+    <!-- Schema.org Organization -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "Organization",
+      "name": "Tankear",
+      "url": "https://tankear.com.ar",
+      "logo": "https://tankear.com.ar/og-image.png",
+      "sameAs": ["https://t.me/tankear_ar"]
+    }
+    </script>
 
     <!-- Cloudflare Turnstile — required for user registration CAPTCHA -->
     <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
