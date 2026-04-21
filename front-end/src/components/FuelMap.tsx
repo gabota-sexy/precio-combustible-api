@@ -4,6 +4,50 @@ import { formatCurrency } from '../utils/api';
 import { isStale } from '../utils/stale';
 import { MapPinIcon, PlusCircleIcon } from 'lucide-react';
 import { ActualizarPrecioModal, ReportarEstacionModal, NuevaEstacionModal } from './community/CommunityActions';
+
+// ── Brand marker SVGs para estaciones sin precio ─────────────────────────────
+const BRAND_MARKERS: Record<string, string> = {
+  YPF: `<svg xmlns="http://www.w3.org/2000/svg" width="44" height="22" viewBox="0 0 44 22">
+    <rect width="44" height="22" rx="11" fill="#003DA5"/>
+    <rect x="22" y="0" width="22" height="22" rx="0" fill="#003DA5"/>
+    <rect x="33" y="0" width="11" height="22" rx="11" fill="#003DA5"/>
+    <text x="22" y="15" text-anchor="middle" font-family="Arial Black,Arial" font-weight="900" font-size="11" fill="white" letter-spacing="0.5">YPF</text>
+    <rect x="0" y="18" width="44" height="4" rx="2" fill="#E8001C" opacity="0.9"/>
+  </svg>`,
+
+  GULF: `<svg xmlns="http://www.w3.org/2000/svg" width="44" height="22" viewBox="0 0 44 22">
+    <rect width="44" height="22" rx="11" fill="#F47920"/>
+    <text x="22" y="15.5" text-anchor="middle" font-family="Arial,sans-serif" font-weight="700" font-size="11" fill="white" font-style="italic">Gulf</text>
+  </svg>`,
+
+  AXION: `<svg xmlns="http://www.w3.org/2000/svg" width="44" height="22" viewBox="0 0 44 22">
+    <rect width="44" height="22" rx="11" fill="#5B21B6"/>
+    <text x="22" y="15" text-anchor="middle" font-family="Arial,sans-serif" font-weight="700" font-size="10" fill="white" letter-spacing="0.3">axion</text>
+  </svg>`,
+
+  PUMA: `<svg xmlns="http://www.w3.org/2000/svg" width="44" height="22" viewBox="0 0 44 22">
+    <rect width="44" height="22" rx="11" fill="#15803D"/>
+    <text x="22" y="15" text-anchor="middle" font-family="Arial Black,Arial" font-weight="900" font-size="10" fill="white" letter-spacing="1">PUMA</text>
+  </svg>`,
+
+  SHELL: `<svg xmlns="http://www.w3.org/2000/svg" width="44" height="22" viewBox="0 0 44 22">
+    <rect width="44" height="22" rx="11" fill="#DD1D21"/>
+    <text x="22" y="15" text-anchor="middle" font-family="Arial,sans-serif" font-weight="700" font-size="10" fill="#FFC72C" letter-spacing="0.5">SHELL</text>
+  </svg>`,
+
+  BP: `<svg xmlns="http://www.w3.org/2000/svg" width="44" height="22" viewBox="0 0 44 22">
+    <rect width="44" height="22" rx="11" fill="#006600"/>
+    <text x="22" y="15.5" text-anchor="middle" font-family="Arial Black,Arial" font-weight="900" font-size="12" fill="white">BP</text>
+  </svg>`,
+};
+
+function getBrandMarkerHtml(bandera: string): string | null {
+  const key = (bandera || '').toUpperCase().trim();
+  const svg = BRAND_MARKERS[key];
+  if (!svg) return null;
+  const b64 = btoa(unescape(encodeURIComponent(svg)));
+  return `<img src="data:image/svg+xml;base64,${b64}" width="44" height="22" style="display:block;filter:drop-shadow(0 2px 4px rgba(0,0,0,0.6));cursor:pointer;" />`;
+}
 interface FocusPoint {
   lat: number;
   lon: number;
@@ -218,17 +262,16 @@ export function FuelMap({ data, selectedStation, focusPoint, className, style }:
         const productInfo = getProductInfo(station.producto || '');
         const noPrecio = station.precio == null || station.precio === 0;
         const stale = noPrecio || isStale(station);
-        // Para estaciones sin precio usar color de bandera, no de producto
-        const BRAND_COLORS: Record<string,string> = {
-          'YPF': '#1d4ed8', 'AXION': '#7c3aed', 'GULF': '#ea580c',
-          'PUMA': '#16a34a', 'SHELL': '#dc2626', 'BP': '#15803d',
-        };
-        const brandColor = station.bandera ? BRAND_COLORS[(station.bandera as string).toUpperCase()] : undefined;
-        const color = noPrecio && brandColor ? brandColor : productInfo.color;
+        const color = productInfo.color;
         const price = formatCurrency(station.precio);
+        const brandHtml = noPrecio ? getBrandMarkerHtml(station.bandera as string || '') : null;
         const icon = L.divIcon({
           className: 'custom-marker',
-          html: stale
+          html: brandHtml
+            // Estación sin precio → logo de la marca
+            ? brandHtml
+            : stale
+            // Precio viejo → dot pequeño con color de producto
             ? `<div style="
                 display:flex;align-items:center;justify-content:center;
                 background-color:${color};
@@ -238,6 +281,7 @@ export function FuelMap({ data, selectedStation, focusPoint, className, style }:
                 box-shadow:0 1px 5px rgba(0,0,0,0.5);
                 cursor:pointer;opacity:0.7;
               "></div>`
+            // Precio fresco → pill con precio
             : `<div style="
                 display:flex;align-items:center;gap:4px;
                 background-color:${color};
@@ -251,8 +295,8 @@ export function FuelMap({ data, selectedStation, focusPoint, className, style }:
                 <span style="width:7px;height:7px;border-radius:50%;background:rgba(255,255,255,0.9);flex-shrink:0;"></span>
                 <span style="font-size:11px;font-weight:700;color:white;letter-spacing:-0.3px;">${price}</span>
               </div>`,
-          iconSize: stale ? [14, 14] : [90, 22],
-          iconAnchor: stale ? [7, 7] : [45, 11],
+          iconSize: brandHtml ? [44, 22] : stale ? [14, 14] : [90, 22],
+          iconAnchor: brandHtml ? [22, 11] : stale ? [7, 7] : [45, 11],
           popupAnchor: [0, -14]
         });
         const key = getMarkerKey(station);
