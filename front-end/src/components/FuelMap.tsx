@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState, useRef } from 'react';
 import { Station, getProductInfo } from '../types';
 import { formatCurrency } from '../utils/api';
+import { isStale } from '../utils/stale';
 import { MapPinIcon, PlusCircleIcon } from 'lucide-react';
 import { ActualizarPrecioModal, ReportarEstacionModal, NuevaEstacionModal } from './community/CommunityActions';
 interface FocusPoint {
@@ -214,26 +215,44 @@ export function FuelMap({ data, selectedStation, focusPoint, className, style }:
     // Add new markers
     validData.forEach((station) => {
       try {
-        const productInfo = getProductInfo(station.producto);
-        const color = productInfo.color;
+        const productInfo = getProductInfo(station.producto || '');
+        const noPrecio = station.precio == null || station.precio === 0;
+        const stale = noPrecio || isStale(station);
+        // Para estaciones sin precio usar color de bandera, no de producto
+        const BRAND_COLORS: Record<string,string> = {
+          'YPF': '#1d4ed8', 'AXION': '#7c3aed', 'GULF': '#ea580c',
+          'PUMA': '#16a34a', 'SHELL': '#dc2626', 'BP': '#15803d',
+        };
+        const brandColor = station.bandera ? BRAND_COLORS[(station.bandera as string).toUpperCase()] : undefined;
+        const color = noPrecio && brandColor ? brandColor : productInfo.color;
         const price = formatCurrency(station.precio);
         const icon = L.divIcon({
           className: 'custom-marker',
-          html: `<div style="
-            display:flex;align-items:center;gap:4px;
-            background-color:${color};
-            padding:3px 7px 3px 5px;
-            border-radius:20px;
-            border:1.5px solid rgba(255,255,255,0.85);
-            box-shadow:0 2px 8px rgba(0,0,0,0.7);
-            white-space:nowrap;
-            cursor:pointer;
-          ">
-            <span style="width:7px;height:7px;border-radius:50%;background:rgba(255,255,255,0.9);flex-shrink:0;"></span>
-            <span style="font-size:11px;font-weight:700;color:white;letter-spacing:-0.3px;">${price}</span>
-          </div>`,
-          iconSize: [90, 22],
-          iconAnchor: [45, 11],
+          html: stale
+            ? `<div style="
+                display:flex;align-items:center;justify-content:center;
+                background-color:${color};
+                width:14px;height:14px;
+                border-radius:50%;
+                border:2px solid rgba(255,255,255,0.7);
+                box-shadow:0 1px 5px rgba(0,0,0,0.5);
+                cursor:pointer;opacity:0.7;
+              "></div>`
+            : `<div style="
+                display:flex;align-items:center;gap:4px;
+                background-color:${color};
+                padding:3px 7px 3px 5px;
+                border-radius:20px;
+                border:1.5px solid rgba(255,255,255,0.85);
+                box-shadow:0 2px 8px rgba(0,0,0,0.7);
+                white-space:nowrap;
+                cursor:pointer;
+              ">
+                <span style="width:7px;height:7px;border-radius:50%;background:rgba(255,255,255,0.9);flex-shrink:0;"></span>
+                <span style="font-size:11px;font-weight:700;color:white;letter-spacing:-0.3px;">${price}</span>
+              </div>`,
+          iconSize: stale ? [14, 14] : [90, 22],
+          iconAnchor: stale ? [7, 7] : [45, 11],
           popupAnchor: [0, -14]
         });
         const key = getMarkerKey(station);
