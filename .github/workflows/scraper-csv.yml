@@ -1,0 +1,80 @@
+name: Descargar CSV y ejecutar scraper
+
+on:
+  schedule:
+    - cron: '50 8 * * *'
+  workflow_dispatch:
+    inputs:
+      fecha:
+        description: 'Fecha para backfill (YYYY-MM-DD), vacío = hoy'
+        required: false
+        default: ''
+
+jobs:
+  fetch-and-run:
+    name: Fetch CSV → Upload → Run scraper
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Descargar CSV de datos.energia.gob.ar
+        id: fetch
+        run: |
+          set -euo pipefail
+          CSV_URL="http://datos.energia.gob.ar/dataset/1c181390-5045-475e-94dc-410429be4b17/resource/80ac25de-a44a-4445-9215-0bcf7f6dface/download/precios-en-surtidor.csv"
+          echo "Descargando CSV..."
+          curl -fsSL \
+            --max-time 120 \
+            --retry 3 \
+            --retry-delay 10 \
+            -H "User-Agent: Mozilla/5.0 (compatible; Tankear/2.0; +https://tankear.com.ar)" \
+            -H "Accept: text/csv,text/plain,*/*" \
+            -o precios_backup.csv \
+            "$CSV_URL"
+          ROWS=$(wc -l < precios_backup.csv)
+          echo "rows=$ROWS" >> $GITHUB_OUTPUT
+          if [ "$ROWS" -lt 1000 ]; then
+            echo "CSV demasiado pequeño ($ROWS líneas) — abortando"
+            exit 1
+          fi
+          echo "CSV OK ($ROWS líneas)"
+
+      - name: Configurar SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.TANKEAR_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H ${{ secrets.TANKEAR_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Subir CSV al servidor
+        run: |
+          scp -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no \
+            precios_backup.csv \
+            root@${{ secrets.TANKEAR_HOST }}:/var/www/tankear/data/precios_backup.csv
+
+      - name: Ejecutar scraper en el servidor
+        run: |
+          ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no \
+            root@${{ secrets.TANKEAR_HOST }} bash << 'REMOTE'
+          set -euo pipefail
+          export DB_PATH=/var/www/tankear/data/tankear.db
+          export TELEGRAM_BOT_TOKEN=8673787872:AAGuQs_0-geYNII9dcwWaEu5eZ7I0J6FNW8
+          export TELEGRAM_ADMIN_ID=1209008738
+          /var/www/tankear/venv/bin/python3 /var/www/tankear/api/scraper_monitor.py
+          REMOTE
+
+      - name: Limpiar CSV del servidor
+        if: success()
+        run: |
+          ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no \
+            root@${{ secrets.TANKEAR_HOST }} \
+            "rm -f /var/www/tankear/data/precios_backup.csv"
+
+      - name: Notificar fallo a Telegram
+        if: failure()
+        run: |
+          ROWS="${{ steps.fetch.outputs.rows }}"
+          curl -s -X POST \
+            "https://api.telegram.org/bot8673787872:AAGuQs_0-geYNII9dcwWaEu5eZ7I0J6FNW8/sendMessage" \
+            -d "chat_id=1209008738&text=❌ GitHub Actions scraper falló — CSV ${ROWS:-?} líneas — ver https://github.com/gabota-sexy/precio-combustible-api/actions&parse_mode=Markdown" \
+            > /dev/null || true
