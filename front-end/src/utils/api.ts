@@ -11,8 +11,8 @@ import {
 export type { DatasetInfo, UbicacionResuelta };
 
 // ─── API Configuration ───────────────────────────────────────────────
-const API_BASE = import.meta.env.VITE_API_BASE || 'https://tankear.com.ar/api';
-const DEFAULT_TIMEOUT = 15000;
+const API_BASE = import.meta.env.VITE_API_BASE || 'https://tvcpev0ryc.execute-api.sa-east-1.amazonaws.com';
+const DEFAULT_TIMEOUT = 15000; // 15s — AWS Lambda can cold-start on first request
 
 // ─── Types ───────────────────────────────────────────────────────────
 export interface FetchOptions {
@@ -340,7 +340,7 @@ signal?: AbortSignal)
   const json: RenderAPIResponse = await response.json();
   const stations = (json.estaciones || []).
   map(toStation).
-  filter((s) => s.precio > 0);
+  filter((s) => s.precio > 0 || s.bandera != null);  // incluir catalog stations sin precio
   const total = json.total || stations.length;
 
   // Cache the result
@@ -426,7 +426,7 @@ export async function fetchSmartData(options: {
     const json: SmartAPIResponse = await response.json();
     const stations = (json.estaciones || []).
     map(toStation).
-    filter((s) => s.precio > 0);
+    filter((s) => s.precio > 0 || s.bandera != null);  // incluir catalog stations sin precio (con logo de marca)
     const total = json.total || stations.length;
 
     cache.set(cacheKey, { data: stations, total, timestamp: Date.now() });
