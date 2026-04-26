@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Percent, Clock, AlertCircle, RefreshCw } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Percent, Clock, AlertCircle, RefreshCw, ChevronRight } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '';
 
@@ -153,8 +154,16 @@ export default function PromosSection() {
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
           {data.promos.map((p,i) => <PromoCard key={i} promo={p} />)}
         </div>
-        <p className="text-xs text-gray-400 mt-4 text-center">
-          Promos actualizadas automáticamente cada 15 días
+        <div className="mt-5 flex justify-center">
+          <Link
+            to="/promos"
+            className="flex items-center gap-2 bg-amber-500 hover:bg-amber-400 text-black font-bold text-sm px-5 py-2.5 rounded-xl transition-colors"
+          >
+            Ver todas las promos de combustible <ChevronRight size={15} />
+          </Link>
+        </div>
+        <p className="text-xs text-gray-400 mt-3 text-center">
+          Actualizadas automáticamente el 1° y 15 de cada mes
         </p>
       </div>
     </section>
