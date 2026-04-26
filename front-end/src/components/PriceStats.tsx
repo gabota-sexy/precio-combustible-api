@@ -25,7 +25,7 @@ export function PriceStats({ data, filters, ubicacion }: PriceStatsProps) {
   // Extraer strings estables de ubicacion para evitar disparar el effect
   // con cada nueva referencia de objeto (causa las llamadas duplicadas)
   const ubicacionProvincia = ubicacion?.provincia ?? null;
-  const ubicacionLocalidad = ubicacion?.localidad_dataset ?? null;
+  const ubicacionLocalidad = ubicacion?.localidad_detectada ?? ubicacion?.localidad_dataset ?? null;
   const lastCallRef = useRef<string>('');
 
   useEffect(() => {

@@ -55,10 +55,10 @@ export async function fetchEstadisticas(options: {
 }): Promise<EstadisticasResponse> {
   const { provincia, localidad, lat, lon, radio_km, producto, fecha_desde } = options;
 
-  // Default: solo precios de los últimos 90 días (evita datos históricos corruptos)
+  // Default: solo precios de los últimos 7 días — Argentina tiene inflación alta, datos viejos distorsionan
   const cutoff = fecha_desde || (() => {
     const d = new Date();
-    d.setDate(d.getDate() - 90);
+    d.setDate(d.getDate() - 7);
     return d.toISOString().split('T')[0];
   })();
 

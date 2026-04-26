@@ -9,6 +9,7 @@ import { LoginModal } from '../components/LoginModal';
 import { useNewsData, timeAgo } from '../hooks/useNewsData';
 import { useUser } from '../hooks/useUser';
 import { NewspaperIcon, FlagIcon, GlobeIcon, BellIcon, RefreshCwIcon } from 'lucide-react';
+import { trackNoticiaClick } from '../utils/analytics';
 import { Footer } from '../components/Footer';
 
 export function NoticiasPage() {
@@ -130,6 +131,7 @@ export function NoticiasPage() {
               <a
                 key={i}
                 href={art.url}
+                onClick={() => trackNoticiaClick(art.fuente || art.source || 'desconocida', art.titulo || art.title)}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="group bg-slate-900/60 border border-slate-800/60 hover:border-amber-500/30

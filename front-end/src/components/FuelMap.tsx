@@ -41,12 +41,51 @@ const BRAND_MARKERS: Record<string, string> = {
   </svg>`,
 };
 
+// Normaliza variantes de bandera: "SHELL C.A.P.S.A." → "SHELL", etc.
+function normalizeBandera(bandera: string): string {
+  const u = (bandera || '').toUpperCase().trim();
+  if (u.startsWith('SHELL')) return 'SHELL';
+  if (u.startsWith('AXION')) return 'AXION';
+  if (u.startsWith('PUMA')) return 'PUMA';
+  if (u.startsWith('GULF')) return 'GULF';
+  if (u.startsWith('YPF')) return 'YPF';
+  if (u.startsWith('BP')) return 'BP';
+  return u;
+}
+
 function getBrandMarkerHtml(bandera: string): string | null {
-  const key = (bandera || '').toUpperCase().trim();
+  const key = normalizeBandera(bandera);
   const svg = BRAND_MARKERS[key];
   if (!svg) return null;
   const b64 = btoa(unescape(encodeURIComponent(svg)));
   return `<img src="data:image/svg+xml;base64,${b64}" width="44" height="22" style="display:block;filter:drop-shadow(0 2px 4px rgba(0,0,0,0.6));cursor:pointer;" />`;
+}
+
+// Marcador SVG con precio integrado en el logo de marca
+function getBrandedPriceMarkerHtml(bandera: string, price: string): string | null {
+  const key = normalizeBandera(bandera);
+  const BRAND_INFO: Record<string, { bg: string; fg: string; label: string }> = {
+    YPF:   { bg: '#003DA5', fg: 'white',   label: 'YPF'   },
+    GULF:  { bg: '#F47920', fg: 'white',   label: 'Gulf'  },
+    AXION: { bg: '#5B21B6', fg: 'white',   label: 'axion' },
+    PUMA:  { bg: '#15803D', fg: 'white',   label: 'PUMA'  },
+    SHELL: { bg: '#DD1D21', fg: '#FFC72C', label: 'SHELL' },
+  };
+  const info = BRAND_INFO[key];
+  if (!info) return null;
+  // SVG de 56x36: logo arriba (22px) + precio abajo (14px) con solo colores sólidos
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="56" height="36" viewBox="0 0 56 36">`
+    + `<rect width="56" height="22" rx="11" fill="${info.bg}"/>`
+    + `<text x="28" y="15" text-anchor="middle" font-family="Arial Black,Arial,sans-serif" font-weight="900" font-size="10" fill="${info.fg}" letter-spacing="0.5">${info.label}</text>`
+    + `<rect x="4" y="23" width="48" height="13" rx="6" fill="#1e293b"/>`
+    + `<text x="28" y="33.5" text-anchor="middle" font-family="Arial,sans-serif" font-weight="700" font-size="9" fill="white">${price}</text>`
+    + `</svg>`;
+  try {
+    const b64 = btoa(unescape(encodeURIComponent(svg)));
+    return `<img src="data:image/svg+xml;base64,${b64}" width="56" height="36" style="display:block;filter:drop-shadow(0 2px 5px rgba(0,0,0,0.65));cursor:pointer;" />`;
+  } catch {
+    return null;
+  }
 }
 interface FocusPoint {
   lat: number;
@@ -264,7 +303,9 @@ export function FuelMap({ data, selectedStation, focusPoint, className, style }:
         const stale = noPrecio || isStale(station);
         const color = productInfo.color;
         const price = formatCurrency(station.precio);
-        const brandHtml = noPrecio ? getBrandMarkerHtml(station.bandera as string || '') : null;
+        const normalBandera = normalizeBandera(station.bandera as string || '');
+        const brandHtml = noPrecio ? getBrandMarkerHtml(normalBandera) : null;
+        const brandedPrice = (!noPrecio && !stale) ? getBrandedPriceMarkerHtml(normalBandera, price) : null;
         const icon = L.divIcon({
           className: 'custom-marker',
           html: brandHtml
@@ -281,22 +322,24 @@ export function FuelMap({ data, selectedStation, focusPoint, className, style }:
                 box-shadow:0 1px 5px rgba(0,0,0,0.5);
                 cursor:pointer;opacity:0.7;
               "></div>`
-            // Precio fresco → pill con precio
-            : `<div style="
-                display:flex;align-items:center;gap:4px;
-                background-color:${color};
-                padding:3px 7px 3px 5px;
-                border-radius:20px;
-                border:1.5px solid rgba(255,255,255,0.85);
-                box-shadow:0 2px 8px rgba(0,0,0,0.7);
-                white-space:nowrap;
-                cursor:pointer;
-              ">
-                <span style="width:7px;height:7px;border-radius:50%;background:rgba(255,255,255,0.9);flex-shrink:0;"></span>
-                <span style="font-size:11px;font-weight:700;color:white;letter-spacing:-0.3px;">${price}</span>
-              </div>`,
-          iconSize: brandHtml ? [44, 22] : stale ? [14, 14] : [90, 22],
-          iconAnchor: brandHtml ? [22, 11] : stale ? [7, 7] : [45, 11],
+            // Precio fresco → logo de marca + precio (o pill genérico si marca desconocida)
+            : brandedPrice
+              ? brandedPrice
+              : `<div style="
+                  display:flex;align-items:center;gap:4px;
+                  background-color:${color};
+                  padding:3px 7px 3px 5px;
+                  border-radius:20px;
+                  border:1.5px solid rgba(255,255,255,0.85);
+                  box-shadow:0 2px 8px rgba(0,0,0,0.7);
+                  white-space:nowrap;
+                  cursor:pointer;
+                ">
+                  <span style="width:7px;height:7px;border-radius:50%;background:rgba(255,255,255,0.9);flex-shrink:0;"></span>
+                  <span style="font-size:11px;font-weight:700;color:white;letter-spacing:-0.3px;">${price}</span>
+                </div>`,
+          iconSize: brandHtml ? [44, 22] : stale ? [14, 14] : brandedPrice ? [56, 36] : [90, 22],
+          iconAnchor: brandHtml ? [22, 11] : stale ? [7, 7] : brandedPrice ? [28, 36] : [45, 11],
           popupAnchor: [0, -14]
         });
         const key = getMarkerKey(station);

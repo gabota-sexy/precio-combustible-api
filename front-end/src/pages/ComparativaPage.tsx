@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useSEO } from '../hooks/useSEO';
 import { Header } from '../components/Header';
 import { QuickNav } from '../components/QuickNav';
@@ -13,6 +13,7 @@ import { useUser } from '../hooks/useUser';
 import { filterFresh } from '../utils/stale';
 import { Footer } from '../components/Footer';
 import { BarChart2Icon } from 'lucide-react';
+import { trackComparativaVista } from '../utils/analytics';
 
 export function ComparativaPage() {
   useSEO({
@@ -34,6 +35,20 @@ export function ComparativaPage() {
   });
 
   const freshData = useMemo(() => filterFresh(data), [data]);
+
+  // Analytics: fire once when data loads
+  useEffect(() => {
+    if (!loading && data.length > 0) {
+      const provincias  = [...new Set(data.map(d => d.provincia).filter(Boolean))] as string[];
+      const banderas    = [...new Set(data.map(d => d.empresa).filter(Boolean))]   as string[];
+      trackComparativaVista({
+        provincias,
+        producto: filters.producto || 'todos',
+        banderas,
+      });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading]);
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-200 font-sans selection:bg-amber-500/30">

@@ -3,6 +3,13 @@ import { Link } from 'react-router-dom';
 import { Station, PRODUCT_MAP, getProductInfo } from '../types';
 import { formatCurrency, getCompanyColorClass } from '../utils/api';
 import { staleDaysAgo } from '../utils/stale';
+
+// Un producto es "fresco" si tiene precio actual (>= $1000) y fue reportado en los últimos 30 días
+const MIN_PRICE_SANE = 1000;
+function isProductFresh(p: { precio: number | null; fecha_vigencia: string }): boolean {
+  if (p.precio == null || p.precio < MIN_PRICE_SANE) return false;
+  return staleDaysAgo(p.fecha_vigencia) <= 30;
+}
 import { stationSlug } from '../utils/slug';
 import {
   MapPinIcon,
@@ -43,9 +50,11 @@ interface GroupedStation {
   distancia?: number;
   products: {
     producto: string;
-    precio: number;
+    precio: number | null;
     fecha_vigencia: string;
+    fecha_ultimo_reporte?: string;
   }[];
+  fecha_ultimo_reporte?: string;
 }
 function groupStations(data: Station[]): GroupedStation[] {
   const map = new Map<string, GroupedStation>();
@@ -84,9 +93,10 @@ function groupStations(data: Station[]): GroupedStation[] {
         {
           producto: s.producto,
           precio: s.precio,
-          fecha_vigencia: s.fecha_vigencia
-        }]
-
+          fecha_vigencia: s.fecha_vigencia,
+          fecha_ultimo_reporte: s.fecha_ultimo_reporte,
+        }],
+        fecha_ultimo_reporte: s.fecha_ultimo_reporte,
       });
     }
   }
@@ -193,19 +203,21 @@ export function StationList({
         return (a.distancia || Infinity) - (b.distancia || Infinity);
       }
       if (sortBy === 'precio') {
-        // Sort by cheapest product price
-        const aMin = Math.min(...a.products.map((p) => p.precio));
-        const bMin = Math.min(...b.products.map((p) => p.precio));
-        return aMin - bMin;
+        // Usar solo precios frescos (>= $1000, <= 30 días) — ignorar datos históricos
+        const freshMin = (g: GroupedStation) => {
+          const prices = g.products.filter(isProductFresh).map((p) => p.precio!);
+          return prices.length > 0 ? Math.min(...prices) : Infinity;
+        };
+        return freshMin(a) - freshMin(b);
       }
-      // Default: sort by most recent fecha_vigencia
-      const aDate = a.products[0]?.fecha_vigencia ?
-      new Date(a.products[0].fecha_vigencia).getTime() :
-      0;
-      const bDate = b.products[0]?.fecha_vigencia ?
-      new Date(b.products[0].fecha_vigencia).getTime() :
-      0;
-      return bDate - aDate; // Most recent first
+      // Default: fecha más reciente de los productos frescos
+      const freshDate = (g: GroupedStation) => {
+        const dates = g.products
+          .filter((p) => p.precio && p.precio >= MIN_PRICE_SANE && p.fecha_vigencia)
+          .map((p) => new Date(p.fecha_vigencia).getTime());
+        return dates.length > 0 ? Math.max(...dates) : 0;
+      };
+      return freshDate(b) - freshDate(a); // Más reciente primero
     });
   }, [grouped, productFilter, searchQuery, sortBy, hasDistances, soloRecientes, freshCount]);
   const isCabaNoBarrio =
@@ -351,23 +363,35 @@ function StationCard({
 
 
 }: {station: GroupedStation;idx: number;selectedStation?: Station | null;onStationClick?: (station: Station) => void;data: Station[];}) {
-  const [activeProductIdx, setActiveProductIdx] = useState(0);
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
   const [showAlert, setShowAlert] = useState(false);
-  // Sort products: liquid fuels first, GNC last
+  // Sort: frescos primero → GNC al final → precio ascendente
   const sortedProducts = useMemo(() => {
     return [...station.products].sort((a, b) => {
-      const aGnc = a.producto.includes('GNC') ? 1 : 0;
-      const bGnc = b.producto.includes('GNC') ? 1 : 0;
+      const aGnc = (a.producto || '').includes('GNC') ? 1 : 0;
+      const bGnc = (b.producto || '').includes('GNC') ? 1 : 0;
       if (aGnc !== bGnc) return aGnc - bGnc;
-      return a.precio - b.precio;
+      // Frescos antes que stale
+      const aFresh = isProductFresh(a) ? 0 : 1;
+      const bFresh = isProductFresh(b) ? 0 : 1;
+      if (aFresh !== bFresh) return aFresh - bFresh;
+      return (a.precio ?? Infinity) - (b.precio ?? Infinity);
     });
   }, [station.products]);
+  // Arrancar en el primer producto fresco — no en el más barato (que puede ser histórico)
+  const firstFreshIdx = useMemo(
+    () => sortedProducts.findIndex(isProductFresh),
+    [sortedProducts]
+  );
+  const [activeProductIdx, setActiveProductIdx] = useState(() =>
+    firstFreshIdx >= 0 ? firstFreshIdx : 0
+  );
   const displayIdx = hoveredIdx !== null ? hoveredIdx : activeProductIdx;
   const displayProduct = sortedProducts[displayIdx] || sortedProducts[0];
   const productInfo = getProductInfo(displayProduct.producto);
   const displayDias = staleDaysAgo(displayProduct.fecha_vigencia);
-  const displayStale = displayDias > 30;
+  // Stale si tiene más de 30 días O si el precio es < $1000 (dato histórico pre-2025)
+  const displayStale = displayDias > 30 || (displayProduct.precio != null && displayProduct.precio < MIN_PRICE_SANE);
   const isGncOnly =
   sortedProducts.length === 1 && sortedProducts[0].producto.includes('GNC');
   const isSelected = selectedStation ?
@@ -435,23 +459,38 @@ function StationCard({
           }
         </div>
         <div className="text-right flex-shrink-0 ml-2">
-          <AnimatePresence mode="wait">
-            <motion.span
-              key={displayProduct.producto}
-              initial={{ opacity: 0, y: -4 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 4 }}
-              transition={{ duration: 0.15 }}
-              className={`text-xl font-bold block leading-none ${displayStale ? 'text-slate-500 line-through' : 'text-emerald-400'}`}>
-              {formatCurrency(displayProduct.precio)}
-            </motion.span>
-          </AnimatePresence>
-          {displayStale ? (
-            <span className="text-[10px] font-semibold text-slate-500 bg-slate-800 px-1.5 py-0.5 rounded border border-slate-700">
-              Sin confirmar
-            </span>
+          {displayProduct.precio == null ? (
+            <div className="text-right">
+              <span className="text-xs font-semibold text-slate-500 bg-slate-800/80 px-2 py-1 rounded border border-slate-700/60 block leading-none">
+                Sin precio
+              </span>
+              {(displayProduct.fecha_ultimo_reporte || station.fecha_ultimo_reporte) && (
+                <span className="text-[10px] text-slate-600 mt-1 block">
+                  Últ. reporte: {new Date(displayProduct.fecha_ultimo_reporte || station.fecha_ultimo_reporte!).toLocaleDateString('es-AR', { day: 'numeric', month: 'short' })}
+                </span>
+              )}
+            </div>
           ) : (
-            <span className="text-[10px] text-slate-500 font-medium">{productInfo.unit}</span>
+            <>
+              <AnimatePresence mode="wait">
+                <motion.span
+                  key={displayProduct.producto}
+                  initial={{ opacity: 0, y: -4 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 4 }}
+                  transition={{ duration: 0.15 }}
+                  className={`text-xl font-bold block leading-none ${displayStale ? 'text-slate-500 line-through' : 'text-emerald-400'}`}>
+                  {formatCurrency(displayProduct.precio)}
+                </motion.span>
+              </AnimatePresence>
+              {displayStale ? (
+                <span className="text-[10px] font-semibold text-slate-500 bg-slate-800 px-1.5 py-0.5 rounded border border-slate-700">
+                  Sin confirmar
+                </span>
+              ) : (
+                <span className="text-[10px] text-slate-500 font-medium">{productInfo.unit}</span>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -500,29 +539,26 @@ function StationCard({
           const info = getProductInfo(prod.producto);
           const isActive = pIdx === activeProductIdx;
           const isHovered = pIdx === hoveredIdx;
+          const prodFresh = isProductFresh(prod);
           return (
             <button
               key={prod.producto}
               onClick={(e) => handleProductClick(e, pIdx)}
               onMouseEnter={() => setHoveredIdx(pIdx)}
               onMouseLeave={() => setHoveredIdx(null)}
-              className={`group relative inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-all border ${isActive ? `${info.bgClass} ${info.textClass}` : isHovered ? `bg-slate-800 ${info.textClass}` : 'bg-slate-800/50 text-slate-400 border-slate-700/50'}`}
-              style={{
-                borderColor:
-                isActive || isHovered ? `${info.color}40` : undefined
-              }}>
-              
+              className={`group relative inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-all border ${
+                !prodFresh ? 'opacity-40' :
+                isActive ? `${info.bgClass} ${info.textClass}` :
+                isHovered ? `bg-slate-800 ${info.textClass}` :
+                'bg-slate-800/50 text-slate-400 border-slate-700/50'
+              }`}
+              style={{ borderColor: isActive || isHovered ? `${info.color}40` : undefined }}>
               <span
                 className="w-1.5 h-1.5 rounded-full flex-shrink-0"
-                style={{
-                  backgroundColor: info.color
-                }} />
-              
+                style={{ backgroundColor: info.color }} />
               {info.shortLabel}
-              <span
-                className={`font-bold transition-opacity ${isActive || isHovered ? 'opacity-100' : 'opacity-50'}`}>
-                
-                {formatCurrency(prod.precio)}
+              <span className={`font-bold transition-opacity ${isActive || isHovered ? 'opacity-100' : 'opacity-50'}`}>
+                {prodFresh && prod.precio != null ? formatCurrency(prod.precio) : '—'}
               </span>
             </button>);
 

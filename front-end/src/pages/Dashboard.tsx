@@ -30,6 +30,12 @@ import {
   BarChart2Icon, CalculatorIcon, ShieldIcon, RouteIcon,
   BookOpenIcon, ClockIcon, BanknoteIcon,
 } from 'lucide-react';
+import {
+  trackBusquedaPrecio,
+  trackMapaGPSUsado,
+  trackRegistroModalAbierto,
+  trackCotizacionSeguroClick,
+} from '../utils/analytics';
 
 // ─── Location banner ─────────────────────────────────────────────────────────
 function LocationBanner({ ubicacion }: { ubicacion: UbicacionResuelta | null }) {
@@ -237,6 +243,27 @@ export function Dashboard() {
 
   const { blueSell: dolarBlue, blueBuy: dolarBlueBuy, oficialSell: dolarOficial, oficialBuy: dolarOficialBuy } = useDolar();
 
+  // ─── Analytics: GPS detection ────────────────────────────────────────────
+  const gpsTracked = useRef(false);
+  useEffect(() => {
+    if (ubicacion?.method === 'gps' && !gpsTracked.current) {
+      gpsTracked.current = true;
+      trackMapaGPSUsado();
+    }
+  }, [ubicacion?.method]);
+
+  // ─── Analytics: wrap search to fire busqueda_precio event ────────────────
+  const trackedSearch = (f: typeof filters) => {
+    search(f);
+    // Count is unknown at call time; fire event optimistically
+    trackBusquedaPrecio({
+      provincia:  f.provincia  || undefined,
+      localidad:  f.localidad  || undefined,
+      producto:   f.producto   || undefined,
+      resultados: data.length,  // best estimate before results return
+    });
+  };
+
   // Guardar localidad y precio Súper en localStorage para widgets de clima y dólar
   useEffect(() => {
     const loc = ubicacion?.localidad_detectada || ubicacion?.localidad;
@@ -253,8 +280,8 @@ export function Dashboard() {
     <div className="min-h-screen bg-slate-950 text-slate-200 font-sans selection:bg-amber-500/30">
       <Header
         user={user}
-        onCreateAccount={() => setOnboardingOpen(true)}
-        onLogin={() => setLoginOpen(true)}
+        onCreateAccount={() => { trackRegistroModalAbierto("header"); setOnboardingOpen(true); }}
+        onLogin={() => { trackRegistroModalAbierto("login"); setLoginOpen(true); }}
         onLogout={logout}
       />
       <AlertModal zona={ubicacion ? (ubicacion.localidad_detectada || ubicacion.localidad || ubicacion.provincia || undefined) : undefined} />
@@ -348,7 +375,7 @@ export function Dashboard() {
             </section>
 
             {/* ── Filter bar horizontal ── */}
-            <FilterBar filters={filters} onSearch={search} availableData={data} loading={loading} />
+            <FilterBar filters={filters} onSearch={trackedSearch} availableData={data} loading={loading} />
 
             {/* ── Lista izq + Mapa sticky der ── */}
             {needsLocation && data.length === 0 ? (
@@ -469,7 +496,9 @@ export function Dashboard() {
                       <ShieldIcon className="w-4 h-4 text-emerald-400" />
                       <h3 className="text-sm font-semibold text-slate-300">Seguros de Auto</h3>
                     </div>
+                    <div onClick={() => trackCotizacionSeguroClick("dashboard")}>
                     <SeguroCalculator provincia={ubicacion?.provincia || undefined} />
+                    </div>
                   </div>
                 </div>
               </section>

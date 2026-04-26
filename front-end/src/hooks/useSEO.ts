@@ -66,7 +66,8 @@ export function useSEO({ title, description, canonical, ogImage, noIndex }: SEOC
     setMeta('twitter:description', description);
     setMeta('twitter:image',       image);
 
-    if (canonical) setCanonical(canonical);
+    // Siempre actualizar canonical: si no se pasa, usar la URL actual
+    setCanonical(canonical || window.location.href);
 
     return () => {
       document.title = DEFAULT_TITLE;

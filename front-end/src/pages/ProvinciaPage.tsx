@@ -22,19 +22,37 @@ interface ProvinciaStats {
   ultima_actualizacion?: string;
 }
 
-function MetaUpdater({ provincia, stats }: { provincia: string; stats: ProvinciaStats | null }) {
+function MetaUpdater({ provincia, stats, slug }: { provincia: string; stats: ProvinciaStats | null; slug: string }) {
   useEffect(() => {
-    const title = `Precios de combustible en ${provincia} | Tankear`;
-    const desc  = stats?.productos?.length
-      ? `Precios de nafta y gasoil en ${provincia}. Desde ${formatCurrency(Math.min(...stats.productos.map(p => p.precio_min)))} por litro. Comparé estaciones en Tankear.`
-      : `Precios de combustible en ${provincia}. Encontrá la estación más barata con Tankear.`;
+    const title     = `Precio de nafta en ${provincia} hoy | Tankear`;
+    const desc      = `Precios actualizados de nafta Súper, Premium y Gasoil en ${provincia}. Encontrá la estación más barata cerca tuyo. YPF, Shell, Axion, Puma y más.`;
+    const canonical = `https://tankear.com.ar/precios/${slug}`;
+
     document.title = title;
+
+    // Meta description
     document.querySelector('meta[name="description"]')?.setAttribute('content', desc);
+
+    // Canonical — apunta a esta página, no al home
+    let canonicalEl = document.querySelector('link[rel="canonical"]') as HTMLLinkElement | null;
+    if (!canonicalEl) {
+      canonicalEl = document.createElement('link');
+      canonicalEl.setAttribute('rel', 'canonical');
+      document.head.appendChild(canonicalEl);
+    }
+    canonicalEl.setAttribute('href', canonical);
+
+    // Open Graph
     setMeta('og:title',       title);
     setMeta('og:description', desc);
-    setMeta('og:url',         window.location.href);
-    return () => { document.title = 'Tankear — Precios de combustible en Argentina'; };
-  }, [provincia, stats]);
+    setMeta('og:url',         canonical);
+
+    return () => {
+      document.title = 'Tankear — Precios de combustible en Argentina';
+      const el = document.querySelector('link[rel="canonical"]') as HTMLLinkElement | null;
+      if (el) el.setAttribute('href', 'https://tankear.com.ar/');
+    };
+  }, [provincia, slug]);
   return null;
 }
 
@@ -99,7 +117,7 @@ export function ProvinciaPage() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-200">
-      <MetaUpdater provincia={provincia} stats={stats} />
+      <MetaUpdater provincia={provincia} stats={stats} slug={slug || ''} />
 
       {/* Header */}
       <header className="w-full bg-slate-950 border-b border-slate-800 sticky top-0 z-50">

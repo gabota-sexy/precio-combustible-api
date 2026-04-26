@@ -79,21 +79,47 @@ export function useFuelData(initialFilters: FilterState): UseFuelDataReturn {
 
         let data = smartResult.data;
 
-        // Client-side filter: only empresa (API handles provincia/localidad/producto)
+        // Client-side filters
         if (currentFilters.empresa) {
           data = data.filter((s) =>
-          s.empresa.
-          toUpperCase().
-          includes(currentFilters.empresa.toUpperCase())
+            s.empresa.toUpperCase().includes(currentFilters.empresa.toUpperCase())
           );
         }
+        // Banderas filter (chip-based)
+        if (currentFilters.banderas?.length) {
+          data = data.filter((s) =>
+            currentFilters.banderas.some(b =>
+              (s.empresa || '').toUpperCase().includes(b) ||
+              (s.bandera  || '').toUpperCase().includes(b)
+            )
+          );
+        }
+        // Solo con precio filter
+        if (currentFilters.solo_con_precio) {
+          data = data.filter((s) => s.precio != null);
+        }
 
-        // Sort: by distance if available, otherwise by price
+        // Sort
+        const orden = currentFilters.orden ?? 'precio';
         const sorted = [...data].sort((a, b) => {
-          if (a.distancia != null && b.distancia != null) {
-            return a.distancia - b.distancia;
+          if (orden === 'distancia') {
+            const ad = (a as any).distancia_km ?? a.distancia ?? Infinity;
+            const bd = (b as any).distancia_km ?? b.distancia ?? Infinity;
+            return ad - bd;
           }
-          return a.precio - b.precio;
+          if (orden === 'reciente') {
+            const af = a.fecha_vigencia ? new Date(a.fecha_vigencia).getTime() : 0;
+            const bf = b.fecha_vigencia ? new Date(b.fecha_vigencia).getTime() : 0;
+            return bf - af;
+          }
+          // precio (default) — sin precio va al fondo
+          const ap = (a.precio ?? Infinity) as number;
+          const bp = (b.precio ?? Infinity) as number;
+          if (ap !== bp) return ap - bp;
+          // desempate: distancia
+          const ad = (a as any).distancia_km ?? a.distancia ?? Infinity;
+          const bd = (b as any).distancia_km ?? b.distancia ?? Infinity;
+          return ad - bd;
         });
 
         setState({
@@ -115,10 +141,12 @@ export function useFuelData(initialFilters: FilterState): UseFuelDataReturn {
 
           const rawProv = (typeof ub.provincia === 'string' ? ub.provincia : '') || '';
 
-          // localidad: preferir dataset > detectada > localidad genérica
+          // localidad: preferir detectada > dataset > localidad genérica
+          // Nominatim devuelve la localidad real del usuario (ej: MARTINEZ),
+          // mientras que dataset puede ser el vecino más cercano en la BD (ej: SAN ISIDRO).
           const rawLoc =
-            (typeof ub.localidad_dataset === 'string' && ub.localidad_dataset ? ub.localidad_dataset : '') ||
             (typeof ub.localidad_detectada === 'string' && ub.localidad_detectada ? ub.localidad_detectada : '') ||
+            (typeof ub.localidad_dataset === 'string' && ub.localidad_dataset ? ub.localidad_dataset : '') ||
             (typeof ub.localidad === 'string' && ub.localidad ? ub.localidad : '');
 
           console.log('[useFuelData] auto-fill → prov:', rawProv, 'loc:', rawLoc);

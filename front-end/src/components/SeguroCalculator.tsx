@@ -1,7 +1,15 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { ShieldIcon, ExternalLinkIcon, BellIcon, CheckIcon, ChevronRightIcon, CarIcon, ArrowRightIcon } from 'lucide-react';
 import { MiniLeadForm, isAlreadySubscribed } from './MiniLeadForm';
 import autosData from '../data/autos.json';
+import {
+  trackCotizadorPaginaVista,
+  trackCotizadorMarcaSeleccionada,
+  trackCotizadorCoberturaSeleccionada,
+  trackCotizadorCotizarClick,
+  trackCotizadorLeadEnviado,
+  trackCotizadorAfiliadoAbierto,
+} from '../utils/analytics';
 
 const CURRENT_YEAR = new Date().getFullYear();
 const ANOS = Array.from({ length: CURRENT_YEAR - 1989 }, (_, i) => CURRENT_YEAR - i);
@@ -41,6 +49,9 @@ export function SeguroCalculator({ provincia: provinciaProp }: Props) {
   // Estado del flujo
   const [step, setStep] = useState<Step>('form');
 
+  // Track page view once on mount
+  useEffect(() => { trackCotizadorPaginaVista(); }, []);
+
   // Modelos disponibles según la marca seleccionada
   const modelos = useMemo(() => {
     if (!marca) return [];
@@ -67,13 +78,15 @@ export function SeguroCalculator({ provincia: provinciaProp }: Props) {
     return `https://www.123seguro.com/cotizador/auto?${params.toString()}`;
   };
 
-  const openAffiliate = () => {
+  const openAffiliate = (via: 'directo' | 'post_lead' | 'skip_lead' = 'directo') => {
+    trackCotizadorAfiliadoAbierto({ marca, anio, cobertura, via });
     window.open(buildAffiliateUrl(), '_blank', 'noopener,noreferrer');
     setStep('done');
   };
 
   const handleCotizar = () => {
     if (!canSubmit) return;
+    trackCotizadorCotizarClick({ marca, modelo, anio, provincia, cobertura, gnc });
     // Si ya está suscripto, redirigir directo
     if (isAlreadySubscribed()) {
       openAffiliate();
@@ -84,11 +97,12 @@ export function SeguroCalculator({ provincia: provinciaProp }: Props) {
   };
 
   const handleLeadSuccess = () => {
-    openAffiliate();
+    trackCotizadorLeadEnviado('cotizador_seguros');
+    openAffiliate('post_lead');
   };
 
   const handleSkipLead = () => {
-    openAffiliate();
+    openAffiliate('skip_lead');
   };
 
   return (
@@ -120,7 +134,7 @@ export function SeguroCalculator({ provincia: provinciaProp }: Props) {
                 </label>
                 <select
                   value={marca}
-                  onChange={e => { setMarca(e.target.value); setModelo(''); }}
+                  onChange={e => { setMarca(e.target.value); setModelo(''); if (e.target.value) trackCotizadorMarcaSeleccionada(e.target.value); }}
                   className="w-full bg-slate-950 border border-slate-700 focus:border-blue-500/60 rounded-lg px-2.5 py-2.5 text-sm text-slate-200 focus:outline-none transition-colors"
                 >
                   <option value="">Marca...</option>
@@ -200,7 +214,7 @@ export function SeguroCalculator({ provincia: provinciaProp }: Props) {
                   <button
                     key={c.id}
                     type="button"
-                    onClick={() => setCobertura(c.id)}
+                    onClick={() => { setCobertura(c.id); trackCotizadorCoberturaSeleccionada(c.id); }}
                     className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg border text-left transition-colors ${
                       cobertura === c.id
                         ? 'bg-blue-500/10 border-blue-500/30'
@@ -315,7 +329,7 @@ export function SeguroCalculator({ provincia: provinciaProp }: Props) {
               <p className="text-slate-400 text-xs mt-0.5">
                 Si no se abrió,{' '}
                 <button
-                  onClick={() => window.open(buildAffiliateUrl(), '_blank', 'noopener,noreferrer')}
+                  onClick={() => openAffiliate('directo')}
                   className="text-blue-400 underline hover:text-blue-300"
                 >
                   hacé click acá

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { Header } from '../components/Header';
 import { QuickNav } from '../components/QuickNav';
@@ -309,6 +309,14 @@ function SegurosCTA({ from, to }: { from: string; to: string }) {
 
 // ── Page ─────────────────────────────────────────────────────────────────────
 
+import {
+  trackViajeOrigenIngresado,
+  trackViajeDestinoIngresado,
+  trackViajeCalculado,
+  trackViajeParadaVista,
+  trackViajeCompartido,
+} from '../utils/analytics';
+
 export function RoadTripPage() {
   useSEO({
     title:       'Calculadora de viaje en auto — nafta, paradas y clima en ruta | Tankear',
@@ -319,6 +327,12 @@ export function RoadTripPage() {
   const [onboardingOpen, setOnboard]   = useState(false);
   const [loginOpen,      setLoginOpen] = useState(false);
   const [query,          setQuery]     = useState<TripQuery | null>(null);
+
+  const trackedSetQuery = (q: TripQuery) => {
+    setQuery(q);
+    trackViajeOrigenIngresado();
+    trackViajeDestinoIngresado();
+  };
 
   // ── Selection state ───────────────────────────────────────────────────────
   // Fuel stops: selected by index (auto-selected when station found)
@@ -376,6 +390,11 @@ export function RoadTripPage() {
   function toggleFuel(idx: number) {
     setSelectedFuelIdxs(prev => {
       const next = new Set(prev);
+      if (!prev.has(idx)) {
+        // User is selecting a parada — track it
+        const stop = fuel.stops[idx];
+        if (stop?.station) trackViajeParadaVista(stop.station.empresa || 'desconocida');
+      }
       next.has(idx) ? next.delete(idx) : next.add(idx);
       return next;
     });
@@ -431,7 +450,7 @@ export function RoadTripPage() {
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body:    JSON.stringify(payload),
       });
-      if (res.ok) { setTripSaved(true); setTimeout(() => setTripSaved(false), 4000); }
+      if (res.ok) { setTripSaved(true); trackViajeCompartido(); setTimeout(() => setTripSaved(false), 4000); }
     } catch { /* no-op */ }
     finally { setSavingTrip(false); }
   }
@@ -506,6 +525,20 @@ export function RoadTripPage() {
   const isLoading = osrm.loading || fuel.loading;
   const hasResult = osrm.distance_km > 0;
 
+  // Analytics: track when trip calculation completes
+  const prevHasResult = useRef(false);
+  useEffect(() => {
+    if (hasResult && !prevHasResult.current && !fuel.loading) {
+      prevHasResult.current = true;
+      trackViajeCalculado({
+        distancia_km:  Math.round(osrm.distance_km),
+        paradas_nafta: fuel.stops.length,
+        costo_estimado: fuel.total_costo ?? undefined,
+      });
+    }
+    if (!hasResult) prevHasResult.current = false;
+  }, [hasResult, fuel.loading, osrm.distance_km, fuel.stops.length, fuel.total_costo]);
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-200 font-sans selection:bg-amber-500/30">
       <Header user={user}
@@ -543,7 +576,7 @@ export function RoadTripPage() {
           {/* ── Left column ── */}
           <div className="flex-1 min-w-0 space-y-5">
 
-            <TripForm onSubmit={setQuery} loading={isLoading} />
+            <TripForm onSubmit={trackedSetQuery} loading={isLoading} />
 
             {osrm.error && (
               <div className="flex items-center gap-2 text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2.5">
