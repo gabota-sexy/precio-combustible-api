@@ -10,6 +10,7 @@ import { PriceCalculator } from '../components/PriceCalculator';
 import { SeguroCalculator } from '../components/SeguroCalculator';
 import { LeadCaptureForm } from '../components/LeadCaptureForm';
 import { NewsColumns } from '../components/NewsColumns';
+import PromosSection from '../components/PromosSection';
 import { AdSidebar } from '../components/AdSidebar';
 import { AlertModal } from '../components/AlertModal';
 import { OnboardingModal } from '../components/OnboardingModal';
@@ -570,6 +571,9 @@ export function Dashboard() {
             <LeadCaptureForm
               zona={ubicacion ? [ubicacion.localidad_detectada || ubicacion.localidad, ubicacion.provincia].filter(Boolean).join(', ') : undefined}
             />
+
+            {/* ── Promos de combustible ── */}
+            <PromosSection />
 
             {/* ── Noticias 3 columnas ── */}
             <NewsColumns />
