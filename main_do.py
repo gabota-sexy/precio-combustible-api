@@ -607,6 +607,10 @@ def precios_smart(request: Request,
                 lon = float(nom[0]["lon"])
         except Exception:
             pass
+    # Si las coords GPS están fuera de Argentina, ignorarlas (VPN, IP routing, etc.)
+    if lat is not None and lon is not None:
+        if not (-55.0 <= lat <= -21.0 and -73.5 <= lon <= -53.5):
+            lat, lon = None, None  # fuera de Argentina — ignorar GPS
     prov_up = (provincia or "").upper()
     # CABA sin GPS ni barrio: usar coordenadas del centro de CABA como fallback
     # para que el endpoint no tire 400 y muestre algo útil
