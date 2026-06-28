@@ -1,3 +1,4 @@
+import { trackGaragePestana } from '../../utils/analytics';
 import React, { useEffect, useState } from 'react';
 import { XIcon, CarIcon, BookOpenIcon, WrenchIcon, ShieldIcon, CheckIcon } from 'lucide-react';
 import { useAlertas } from '../../hooks/useAlertas';
@@ -64,7 +65,7 @@ export function GarageSection({ onClose, initialTab = 'autos' }: GarageSectionPr
             return (
               <button
                 key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
+                onClick={() => { setActiveTab(tab.id); trackGaragePestana(tab.id); }}
                 className={`relative flex flex-col items-center justify-center gap-1 py-3 text-[10px] font-medium transition-colors ${
                   isActive
                     ? 'text-amber-400'

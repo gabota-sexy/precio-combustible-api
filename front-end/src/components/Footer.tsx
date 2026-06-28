@@ -1,3 +1,4 @@
+import { trackTelegramClick, trackFooterLink } from '../utils/analytics';
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { FuelIcon } from 'lucide-react';
@@ -138,6 +139,7 @@ export function Footer() {
                 <a
                   href="https://t.me/tankear_ar"
                   target="_blank" rel="noopener noreferrer"
+                  onClick={() => trackTelegramClick('footer')}
                   className="flex items-center gap-1.5 text-slate-500 hover:text-blue-400 text-sm transition-colors"
                 >
                   <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor">

@@ -195,8 +195,8 @@ export function TripForm({ onSubmit, loading }: TripFormProps) {
   }, [selectedMarca, selectedModelo, selectedVersion]);
 
   // ── Derived values ─────────────────────────────────────────────────────
-  const consumo_kml = consumoInput ? parseFloat(consumoInput) : (autoEntry?.consumo_ruta_kml ?? 0);
-  const tanque_l    = tanqueInput  ? parseFloat(tanqueInput)  : (autoEntry?.litros_tanque   ?? 0);
+  const consumo_kml = consumoInput ? parseFloat(consumoInput) : (autoEntry?.consumo_ruta_kml ?? 13);
+  const tanque_l    = tanqueInput  ? parseFloat(tanqueInput)  : (autoEntry?.litros_tanque   ?? 50);
   const producto    = productoManual || autoEntry?.combustible || 'nafta_super';
 
   const canSubmit = from.trim() && to.trim() && consumo_kml > 0 && tanque_l > 0 && !loading;

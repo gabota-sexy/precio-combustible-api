@@ -255,3 +255,143 @@ export function trackCotizadorAfiliadoAbierto(params: {
     via:       params.via,
   });
 }
+
+// ─── PROMOS ──────────────────────────────────────────────────────────────────
+
+/** Sección de promos se mostró (cuántas promos cargaron) */
+export function trackPromoVista(cantidad: number) {
+  push('promo_seccion_vista', { cantidad_promos: cantidad });
+}
+
+/** Clic en una card de promo */
+export function trackPromoClick(params: {
+  banco: string;
+  marca: string;
+  pct: string;
+  fuente: 'dashboard' | 'pagina_promos';
+}) {
+  push('promo_click', params);
+}
+
+/** Usuario navega a la página de promos */
+export function trackPromosPaginaVista() {
+  push('promos_pagina_vista');
+}
+
+// ─── NAVEGACIÓN / QUICKNAV ────────────────────────────────────────────────────
+
+/** Clic en item del menú rápido */
+export function trackNavClick(destino: string, tipo: 'anchor' | 'link') {
+  push('nav_click', { destino, tipo });
+}
+
+// ─── ESTACIONES ───────────────────────────────────────────────────────────────
+
+/** Clic en una card de estación en la lista */
+export function trackEstacionClick(params: {
+  bandera: string;
+  precio?: number;
+  producto?: string;
+  provincia?: string;
+  fuente: 'lista' | 'mapa';
+}) {
+  push('estacion_click', params);
+}
+
+/** Clic en "Cómo llegar" de una estación */
+export function trackComoLlegarClick(bandera: string) {
+  push('como_llegar_click', { bandera });
+}
+
+// ─── FILTROS ──────────────────────────────────────────────────────────────────
+
+/** Se aplicó un filtro de búsqueda */
+export function trackFiltroAplicado(campo: string, valor: string) {
+  push('filtro_aplicado', { campo, valor: valor || 'todos' });
+}
+
+/** Se ejecutó una búsqueda */
+export function trackBusquedaEjecutada(params: {
+  provincia?: string;
+  localidad?: string;
+  producto?: string;
+  empresa?: string;
+  resultados: number;
+}) {
+  push('busqueda_ejecutada', {
+    provincia:  params.provincia  || 'todas',
+    localidad:  params.localidad  || 'todas',
+    producto:   params.producto   || 'todos',
+    empresa:    params.empresa    || 'todas',
+    resultados: params.resultados,
+  });
+}
+
+// ─── PROVINCIA PAGE ───────────────────────────────────────────────────────────
+
+/** Vista de página de provincia */
+export function trackProvinciaVista(provincia: string) {
+  push('provincia_vista', { provincia });
+}
+
+/** Clic en link de provincia desde el dashboard */
+export function trackProvinciaLinkClick(provincia: string) {
+  push('provincia_link_click', { provincia });
+}
+
+// ─── FOOTER / LINKS EXTERNOS ─────────────────────────────────────────────────
+
+/** Clic en links del footer o redes sociales */
+export function trackFooterLink(destino: string) {
+  push('footer_link_click', { destino });
+}
+
+// ─── GARAGE ───────────────────────────────────────────────────────────────────
+
+/** Cambio de pestaña dentro del Garage */
+export function trackGaragePestana(tab: string) {
+  push('garage_pestana_click', { tab });
+}
+
+/** Entrada en Bitácora registrada */
+export function trackBitacoraEntrada() {
+  push('bitacora_entrada_registrada');
+}
+
+/** Mantenimiento registrado */
+export function trackMantenimientoRegistrado(tipo: string) {
+  push('mantenimiento_registrado', { tipo });
+}
+
+// ─── MAPA ─────────────────────────────────────────────────────────────────────
+
+/** Usuario activó el modo mapa */
+export function trackMapaActivado() {
+  push('mapa_activado');
+}
+
+/** Usuario hizo zoom en el mapa */
+export function trackMapaZoom(nivel: number) {
+  push('mapa_zoom', { nivel });
+}
+
+// ─── SCROLL MILESTONES ────────────────────────────────────────────────────────
+
+/** Scroll milestone en una página (25%, 50%, 75%, 90%) */
+export function trackScrollMilestone(porcentaje: number, pagina: string) {
+  push('scroll_milestone', { porcentaje, pagina });
+}
+
+// ─── FEEDBACK ─────────────────────────────────────────────────────────────────
+
+/** Usuario envió feedback */
+export function trackFeedbackEnviado(tipo: string) {
+  push('feedback_enviado', { tipo });
+}
+
+// ─── DOLAR PAGE ───────────────────────────────────────────────────────────────
+
+/** Vista de la página del dólar */
+export function trackDolarPaginaVista() {
+  push('dolar_pagina_vista');
+}

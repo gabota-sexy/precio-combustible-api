@@ -1,3 +1,4 @@
+import { trackFiltroAplicado, trackBusquedaEjecutada } from '../utils/analytics';
 import React, { useEffect, useState } from 'react';
 import { FilterState, Station } from '../types';
 import { fetchProvincias, fetchLocalidades } from '../utils/api';
@@ -115,6 +116,7 @@ export function FilterBar({ filters, onSearch, availableData, loading }: FilterB
       setTimeout(() => setHighlightBarrio(false), 1500);
       return;
     }
+    trackBusquedaEjecutada({ provincia: lf.provincia, localidad: lf.localidad, producto: lf.producto, empresa: lf.empresa, resultados: 0 });
     onSearch(lf);
   };
   const clear  = () => {
@@ -134,7 +136,7 @@ export function FilterBar({ filters, onSearch, availableData, loading }: FilterB
           <div className="flex flex-col gap-1">
             <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Provincia</label>
             <SelectWrap>
-              <select value={lf.provincia} onChange={e => setProvince(e.target.value)} className={sel} style={{ minWidth: 140 }}>
+              <select value={lf.provincia} onChange={e => { setProvince(e.target.value); trackFiltroAplicado('provincia', e.target.value); }} className={sel} style={{ minWidth: 140 }}>
                 <option value="">Todas</option>
                 {provincias.map(p => (
                   <option key={p} value={p}>{p === 'CAPITAL FEDERAL' ? 'CAPITAL FEDERAL (CABA)' : p}</option>
@@ -179,7 +181,7 @@ export function FilterBar({ filters, onSearch, availableData, loading }: FilterB
           <div className="flex flex-col gap-1">
             <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Producto</label>
             <SelectWrap>
-              <select value={lf.producto} onChange={e => setLf({ ...lf, producto: e.target.value })} className={sel} style={{ minWidth: 120 }}>
+              <select value={lf.producto} onChange={e => { setLf({ ...lf, producto: e.target.value }); trackFiltroAplicado('producto', e.target.value); }} className={sel} style={{ minWidth: 120 }}>
                 <option value="">Todos</option>
                 {PRODUCTOS.map(p => <option key={p} value={p}>{PRODUCTOS_SHORT[p] ?? p}</option>)}
               </select>

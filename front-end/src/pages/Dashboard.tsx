@@ -1,3 +1,5 @@
+import { useScrollTracking } from '../hooks/useScrollTracking';
+import { trackProvinciaLinkClick, trackTelegramClick } from '../utils/analytics';
 import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { Station, UbicacionResuelta } from '../types';
@@ -5,7 +7,7 @@ import { Header } from '../components/Header';
 import { FilterBar } from '../components/FilterBar';
 import { PriceStats } from '../components/PriceStats';
 import { StationList } from '../components/StationList';
-import { FuelMap } from '../components/FuelMap';
+import { FuelMap, GpsState } from '../components/FuelMap';
 import { PriceCalculator } from '../components/PriceCalculator';
 import { SeguroCalculator } from '../components/SeguroCalculator';
 import { LeadCaptureForm } from '../components/LeadCaptureForm';
@@ -21,7 +23,9 @@ import { useBitacora, BitacoraEntry } from '../hooks/useBitacora';
 import { QuickNav } from '../components/QuickNav';
 import { useFuelData } from '../hooks/useFuelData';
 import { useUser } from '../hooks/useUser';
-import { filterFresh } from '../utils/stale';
+import { filterFresh, staleDaysAgo } from '../utils/stale';
+import { formatCurrency, getCompanyColorClass } from '../utils/api';
+import { getProductInfo } from '../types';
 import { useSEO } from '../hooks/useSEO';
 import { Footer } from '../components/Footer';
 import { useDolar, getSuperUSD } from '../hooks/useDolar';
@@ -29,14 +33,158 @@ import {
   AlertTriangleIcon, InfoIcon,
   MapPinIcon, LocateIcon, GlobeIcon, CompassIcon,
   BarChart2Icon, CalculatorIcon, ShieldIcon, RouteIcon,
-  BookOpenIcon, ClockIcon, BanknoteIcon,
+  BookOpenIcon, ClockIcon, BanknoteIcon, XIcon,
+  NavigationIcon, CalendarIcon,
 } from 'lucide-react';
-import {
-  trackBusquedaPrecio,
-  trackMapaGPSUsado,
-  trackRegistroModalAbierto,
-  trackCotizacionSeguroClick,
-} from '../utils/analytics';
+
+// ─── Station Bottom Sheet (mobile) ───────────────────────────────────────────
+function StationBottomSheet({ station, onClose }: { station: import('../types').Station | null; onClose: () => void }) {
+  const [visible, setVisible] = React.useState(false);
+  React.useEffect(() => {
+    if (station) {
+      // Trigger animation after mount
+      const t = setTimeout(() => setVisible(true), 10);
+      return () => clearTimeout(t);
+    } else {
+      setVisible(false);
+    }
+  }, [station]);
+
+  if (!station) return null;
+
+  const mapsUrl = station.latitud && station.longitud
+    ? `https://www.google.com/maps/dir/?api=1&destination=${station.latitud},${station.longitud}`
+    : `https://www.google.com/maps/search/${encodeURIComponent(`${station.direccion}, ${station.localidad}, ${station.provincia}, Argentina`)}`;
+
+  const precio = station.precio != null && station.precio >= 1000 ? formatCurrency(station.precio) : null;
+  const dias = staleDaysAgo(station.fecha_vigencia);
+  const stale = dias > 30 || (station.precio != null && station.precio < 1000);
+
+  return (
+    <div
+      className="fixed inset-0 z-[600] pointer-events-none lg:hidden"
+      aria-hidden={!station}
+    >
+      {/* Backdrop — only on mobile */}
+      <div
+        className="absolute inset-0 pointer-events-auto"
+        style={{ background: 'transparent' }}
+        onClick={onClose}
+      />
+      {/* Bottom sheet */}
+      <div
+        className="absolute bottom-0 left-0 right-0 pointer-events-auto"
+        style={{
+          background: '#1e293b',
+          borderRadius: '20px 20px 0 0',
+          minHeight: '280px',
+          maxHeight: '65vh',
+          overflowY: 'auto',
+          boxShadow: '0 -8px 40px rgba(0,0,0,0.5)',
+          transform: visible ? 'translateY(0)' : 'translateY(100%)',
+          transition: 'transform 300ms cubic-bezier(0.32, 0.72, 0, 1)',
+          paddingBottom: 'env(safe-area-inset-bottom, 16px)',
+          zIndex: 600,
+        }}
+      >
+        {/* Handle bar */}
+        <div className="flex justify-center pt-3 pb-1">
+          <div style={{ width: 40, height: 4, borderRadius: 2, background: '#475569' }} />
+        </div>
+        {/* Close button */}
+        <button
+          onClick={onClose}
+          className="absolute top-3 right-4 text-slate-400 hover:text-slate-100 transition-colors p-1"
+          aria-label="Cerrar"
+        >
+          <XIcon className="w-5 h-5" />
+        </button>
+        {/* Content */}
+        <div className="px-5 pt-2 pb-6">
+          {/* Company name + color */}
+          <div className="flex items-center gap-3 mb-3">
+            <div className={`w-4 h-4 rounded-full flex-shrink-0 ${getCompanyColorClass(station.empresa || '')}`} />
+            <h3 className="text-lg font-bold text-slate-100 truncate">
+              {station.bandera || station.empresa}
+            </h3>
+            {station.tipo_bandera && station.tipo_bandera !== 'PROPIA' && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-700 text-slate-400">
+                {station.tipo_bandera}
+              </span>
+            )}
+          </div>
+          {/* Address */}
+          <div className="text-sm text-slate-400 mb-4">
+            <p className="font-medium text-slate-300">{station.direccion}</p>
+            <p className="text-slate-500">{station.localidad}, {station.provincia}</p>
+          </div>
+          {/* Price */}
+          {precio ? (
+            <div className="mb-4 flex items-baseline gap-2">
+              <span className={`text-3xl font-bold ${stale ? 'text-slate-500 line-through' : 'text-emerald-400'}`}>
+                {precio}
+              </span>
+              {stale ? (
+                <span className="text-xs font-semibold text-slate-500 bg-slate-700 px-2 py-0.5 rounded">
+                  Sin confirmar
+                </span>
+              ) : (
+                <span className="text-sm text-slate-400">/ {getProductInfo(station.producto).unit}</span>
+              )}
+            </div>
+          ) : (
+            <div className="mb-4">
+              <span className="text-sm text-slate-500 bg-slate-700/80 px-3 py-1 rounded-lg">Sin precio cargado</span>
+            </div>
+          )}
+          {/* Product badge */}
+          <div className="mb-4">
+            {(() => {
+              const info = getProductInfo(station.producto);
+              return (
+                <span
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-sm font-medium border ${info.bgClass} ${info.textClass}`}
+                  style={{ borderColor: `${info.color}40` }}
+                >
+                  <span className="w-2 h-2 rounded-full" style={{ background: info.color }} />
+                  {info.shortLabel}
+                </span>
+              );
+            })()}
+          </div>
+          {/* Date */}
+          {station.fecha_vigencia && (
+            <div className="flex items-center gap-1.5 text-xs text-slate-500 mb-4">
+              <CalendarIcon className="w-3.5 h-3.5" />
+              <span>
+                Actualizado: {new Date(station.fecha_vigencia).toLocaleDateString('es-AR', { day: 'numeric', month: 'short', year: 'numeric' })}
+                {dias > 0 && <span className="ml-1">({dias}d)</span>}
+              </span>
+            </div>
+          )}
+          {/* Action buttons */}
+          <div className="flex gap-3">
+            <a
+              href={mapsUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-sm font-semibold hover:bg-emerald-500/25 transition-colors"
+            >
+              <NavigationIcon className="w-4 h-4" />
+              Cómo llegar
+            </a>
+            <button
+              onClick={onClose}
+              className="px-4 py-2.5 rounded-xl bg-slate-700/60 border border-slate-600 text-slate-300 text-sm font-semibold hover:bg-slate-700 transition-colors"
+            >
+              Cerrar
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // ─── Location banner ─────────────────────────────────────────────────────────
 function LocationBanner({ ubicacion }: { ubicacion: UbicacionResuelta | null }) {
@@ -74,6 +222,7 @@ function DolarCard({ blueSell, blueBuy, oficialSell, oficialBuy }: {
   const [modo,      setModo]      = useState<'ars→usd' | 'usd→ars'>('ars→usd');
   const [tipoCambio, setTipoCambio] = useState<'blue' | 'oficial'>('blue');
   const inputRef = useRef<HTMLInputElement>(null);
+  const trackFiredRef = useRef(false);
 
   const rate = tipoCambio === 'blue'
     ? (modo === 'ars→usd' ? blueSell : (blueBuy ?? blueSell))
@@ -85,6 +234,15 @@ function DolarCard({ blueSell, blueBuy, oficialSell, oficialBuy }: {
     : null;
 
   const brechaNum = oficialSell ? ((blueSell - oficialSell) / oficialSell * 100) : null;
+
+  // Track first use of the calculator per session
+  const handleMontoChange = (val: string) => {
+    setMonto(val);
+    if (val && !trackFiredRef.current) {
+      trackFiredRef.current = true;
+      trackDolarCalculadora(tipoCambio, modo);
+    }
+  };
 
   return (
     <div className="bg-slate-900/60 border border-amber-500/20 rounded-xl p-4">
@@ -157,7 +315,7 @@ function DolarCard({ blueSell, blueBuy, oficialSell, oficialBuy }: {
               min="0"
               placeholder="0"
               value={monto}
-              onChange={e => setMonto(e.target.value)}
+              onChange={e => handleMontoChange(e.target.value)}
               className="w-full h-8 bg-slate-800 border border-slate-700 rounded-lg pl-8 pr-2 text-sm text-slate-200 font-mono focus:outline-none focus:border-amber-500/50 focus:ring-1 focus:ring-amber-500/20 transition-colors"
             />
           </div>
@@ -212,15 +370,44 @@ export function Dashboard() {
   const {
     data, loading, error, isUsingFallback,
     filters, search, refresh, ubicacion, needsLocation,
+    userLocation,
   } = useFuelData({
     provincia: '', localidad: '', barrio: '', empresa: '', producto: '',
     fecha_desde: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+    solo_con_precio: false, banderas: [], orden: 'precio',
   });
+
+  useScrollTracking('dashboard');
+
+  // Compute gpsState for FuelMap overlay from userLocation
+  // 'loading' = first 0-1s (map init), 'searching' = GPS in progress, 'found'/'error'/'done' = resolved
+  const gpsState: GpsState = (() => {
+    if (userLocation.loading) return 'loading';
+    if (userLocation.error)   return 'error';
+    if (userLocation.lat !== null && userLocation.lon !== null) return 'found';
+    return 'done';
+  })();
 
   const { user, logout } = useUser();
   const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [loginOpen,      setLoginOpen]      = useState(false);
   const [garageOpen,     setGarageOpen]     = useState(false);
+
+  // Badge "¡Nuevo!" para Arma tu Viaje
+  const [viajeBadgeVisible, setViajeBadgeVisible] = useState<boolean>(() => {
+    try {
+      const count = parseInt(localStorage.getItem('viaje_badge_count') || '0', 10);
+      return count < 3;
+    } catch { return true; }
+  });
+  const handleViajeClick = () => {
+    try {
+      const count = parseInt(localStorage.getItem('viaje_badge_count') || '0', 10);
+      const next = count + 1;
+      localStorage.setItem('viaje_badge_count', String(next));
+      if (next >= 3) setViajeBadgeVisible(false);
+    } catch { /* ignore */ }
+  };
   const bitacora = useBitacora();
   useEffect(() => { if (user) bitacora.loadEntries(); }, [user]); // eslint-disable-line react-hooks/exhaustive-deps
   const freshData   = useMemo(() => filterFresh(data), [data]);
@@ -244,27 +431,6 @@ export function Dashboard() {
 
   const { blueSell: dolarBlue, blueBuy: dolarBlueBuy, oficialSell: dolarOficial, oficialBuy: dolarOficialBuy } = useDolar();
 
-  // ─── Analytics: GPS detection ────────────────────────────────────────────
-  const gpsTracked = useRef(false);
-  useEffect(() => {
-    if (ubicacion?.method === 'gps' && !gpsTracked.current) {
-      gpsTracked.current = true;
-      trackMapaGPSUsado();
-    }
-  }, [ubicacion?.method]);
-
-  // ─── Analytics: wrap search to fire busqueda_precio event ────────────────
-  const trackedSearch = (f: typeof filters) => {
-    search(f);
-    // Count is unknown at call time; fire event optimistically
-    trackBusquedaPrecio({
-      provincia:  f.provincia  || undefined,
-      localidad:  f.localidad  || undefined,
-      producto:   f.producto   || undefined,
-      resultados: data.length,  // best estimate before results return
-    });
-  };
-
   // Guardar localidad y precio Súper en localStorage para widgets de clima y dólar
   useEffect(() => {
     const loc = ubicacion?.localidad_detectada || ubicacion?.localidad;
@@ -281,8 +447,8 @@ export function Dashboard() {
     <div className="min-h-screen bg-slate-950 text-slate-200 font-sans selection:bg-amber-500/30">
       <Header
         user={user}
-        onCreateAccount={() => { trackRegistroModalAbierto("header"); setOnboardingOpen(true); }}
-        onLogin={() => { trackRegistroModalAbierto("login"); setLoginOpen(true); }}
+        onCreateAccount={() => setOnboardingOpen(true)}
+        onLogin={() => setLoginOpen(true)}
         onLogout={logout}
       />
       <AlertModal zona={ubicacion ? (ubicacion.localidad_detectada || ubicacion.localidad || ubicacion.provincia || undefined) : undefined} />
@@ -376,7 +542,7 @@ export function Dashboard() {
             </section>
 
             {/* ── Filter bar horizontal ── */}
-            <FilterBar filters={filters} onSearch={trackedSearch} availableData={data} loading={loading} />
+            <FilterBar filters={filters} onSearch={search} availableData={data} loading={loading} />
 
             {/* ── Lista izq + Mapa sticky der ── */}
             {needsLocation && data.length === 0 ? (
@@ -412,6 +578,7 @@ export function Dashboard() {
                           data={data}
                           selectedStation={selectedStation}
                           focusPoint={focusPoint}
+                          gpsState={gpsState}
                           className="bg-slate-900/80 border border-slate-800 rounded-xl overflow-hidden relative z-0"
                           style={{ height: 'min(72vh, 680px)' }}
                         />
@@ -445,12 +612,38 @@ export function Dashboard() {
 
             {/* ── Planificador de Viaje CTA ── */}
             <section className="mt-8">
+              <style>{`
+                @keyframes viaje-badge-pulse {
+                  0%, 100% { opacity: 1; transform: scale(1); }
+                  50% { opacity: 0.85; transform: scale(1.08); }
+                }
+                .viaje-badge-new {
+                  background: linear-gradient(135deg, #f97316, #ef4444);
+                  color: white;
+                  font-size: 10px;
+                  font-weight: 700;
+                  padding: 2px 6px;
+                  border-radius: 999px;
+                  position: absolute;
+                  top: -6px;
+                  right: -6px;
+                  animation: viaje-badge-pulse 2s infinite;
+                  white-space: nowrap;
+                  line-height: 1.2;
+                  pointer-events: none;
+                  z-index: 10;
+                }
+              `}</style>
               <Link
                 to="/viaje"
+                onClick={handleViajeClick}
                 className="group flex items-center gap-4 w-full bg-slate-900/60 hover:bg-slate-900 border border-slate-800 hover:border-amber-500/30 rounded-xl px-5 py-4 transition-all"
               >
-                <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/20 group-hover:bg-amber-500/20 group-hover:border-amber-500/40 flex items-center justify-center flex-shrink-0 transition-all">
+                <div className="relative w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/20 group-hover:bg-amber-500/20 group-hover:border-amber-500/40 flex items-center justify-center flex-shrink-0 transition-all">
                   <RouteIcon className="w-5 h-5 text-amber-500" />
+                  {viajeBadgeVisible && (
+                    <span className="viaje-badge-new">¡Nuevo!</span>
+                  )}
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-semibold text-slate-200 group-hover:text-white">Armá tu Viaje</p>
@@ -497,9 +690,7 @@ export function Dashboard() {
                       <ShieldIcon className="w-4 h-4 text-emerald-400" />
                       <h3 className="text-sm font-semibold text-slate-300">Seguros de Auto</h3>
                     </div>
-                    <div onClick={() => trackCotizacionSeguroClick("dashboard")}>
                     <SeguroCalculator provincia={ubicacion?.provincia || undefined} />
-                    </div>
                   </div>
                 </div>
               </section>
@@ -575,6 +766,50 @@ export function Dashboard() {
             {/* ── Promos de combustible ── */}
             <PromosSection />
 
+            {/* ── Precios por provincia (SEO internal links) ── */}
+            <section className="mt-8">
+              <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-3">
+                Precios de nafta por provincia
+              </h2>
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+                {[
+                  { nombre: 'Buenos Aires',                   slug: 'buenos-aires' },
+                  { nombre: 'CABA',                           slug: 'ciudad-autonoma-de-buenos-aires' },
+                  { nombre: 'Córdoba',                        slug: 'cordoba' },
+                  { nombre: 'Santa Fe',                       slug: 'santa-fe' },
+                  { nombre: 'Mendoza',                        slug: 'mendoza' },
+                  { nombre: 'Tucumán',                        slug: 'tucuman' },
+                  { nombre: 'Salta',                          slug: 'salta' },
+                  { nombre: 'Entre Ríos',                     slug: 'entre-rios' },
+                  { nombre: 'Misiones',                       slug: 'misiones' },
+                  { nombre: 'Chaco',                          slug: 'chaco' },
+                  { nombre: 'Corrientes',                     slug: 'corrientes' },
+                  { nombre: 'Santiago del Estero',            slug: 'santiago-del-estero' },
+                  { nombre: 'San Juan',                       slug: 'san-juan' },
+                  { nombre: 'Jujuy',                          slug: 'jujuy' },
+                  { nombre: 'Río Negro',                      slug: 'rio-negro' },
+                  { nombre: 'Neuquén',                        slug: 'neuquen' },
+                  { nombre: 'Formosa',                        slug: 'formosa' },
+                  { nombre: 'Chubut',                         slug: 'chubut' },
+                  { nombre: 'San Luis',                       slug: 'san-luis' },
+                  { nombre: 'Catamarca',                      slug: 'catamarca' },
+                  { nombre: 'La Rioja',                       slug: 'la-rioja' },
+                  { nombre: 'La Pampa',                       slug: 'la-pampa' },
+                  { nombre: 'Santa Cruz',                     slug: 'santa-cruz' },
+                  { nombre: 'Tierra del Fuego',               slug: 'tierra-del-fuego' },
+                ].map(({ nombre, slug }) => (
+                  <Link
+                    key={slug}
+                    to={`/precios/${slug}`}
+                    onClick={() => trackProvinciaLinkClick(nombre)}
+                    className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-400 hover:text-amber-400 hover:border-amber-500/30 transition-colors truncate"
+                  >
+                    ⛽ {nombre}
+                  </Link>
+                ))}
+              </div>
+            </section>
+
             {/* ── Noticias 3 columnas ── */}
             <NewsColumns />
 
@@ -593,6 +828,8 @@ export function Dashboard() {
         </div>
         <Footer />
       </main>
+      {/* Mobile bottom sheet — shown when a station is selected */}
+      <StationBottomSheet station={selectedStation} onClose={() => setSelectedStation(null)} />
     </div>
   );
 }

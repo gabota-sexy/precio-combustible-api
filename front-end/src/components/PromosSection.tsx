@@ -1,3 +1,4 @@
+import { trackPromoVista, trackPromoClick } from '../utils/analytics';
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Percent, Clock, AlertCircle, RefreshCw, ChevronRight } from 'lucide-react';
@@ -11,6 +12,9 @@ interface Promo {
   tope: string;
   dia: string;
   vigencia: string;
+  logo_url?: string;
+  fuente_url?: string;
+  fuente_nombre?: string;
 }
 
 interface PromosData {
@@ -20,6 +24,7 @@ interface PromosData {
   fuente: string;
 }
 
+// Colores por banco/app
 const BANCO_COLORS: Record<string, { bg: string; border: string; badge: string }> = {
   'Mercado Pago':  { bg: 'bg-sky-50',    border: 'border-sky-300',    badge: 'bg-sky-500 text-white' },
   'Shell Box':     { bg: 'bg-red-50',    border: 'border-red-300',    badge: 'bg-red-600 text-white' },
@@ -31,11 +36,20 @@ const BANCO_COLORS: Record<string, { bg: string; border: string; badge: string }
   'Comafi':        { bg: 'bg-green-50',  border: 'border-green-300',  badge: 'bg-green-600 text-white' },
   'Galicia':       { bg: 'bg-red-50',    border: 'border-red-300',    badge: 'bg-red-700 text-white' },
   'BBVA':          { bg: 'bg-blue-50',   border: 'border-blue-300',   badge: 'bg-blue-600 text-white' },
+  'Naranja X':     { bg: 'bg-orange-50', border: 'border-orange-300', badge: 'bg-orange-600 text-white' },
+  'Ualá':          { bg: 'bg-purple-50', border: 'border-purple-300', badge: 'bg-purple-600 text-white' },
 };
+
 const DEFAULT_COLOR = { bg: 'bg-gray-50', border: 'border-gray-300', badge: 'bg-gray-600 text-white' };
 
+// Iconos de estación
 const MARCA_EMOJI: Record<string, string> = {
-  'YPF':'🔵','Shell':'🔴','Axion':'🟠','Puma':'🟣','Gulf':'🟡','Todas':'⛽',
+  'YPF':   '🔵',
+  'Shell': '🔴',
+  'Axion': '🟠',
+  'Puma':  '🟣',
+  'Gulf':  '🟡',
+  'Todas': '⛽',
 };
 
 function formatScrapedAt(dt: string | null): string {
@@ -43,21 +57,46 @@ function formatScrapedAt(dt: string | null): string {
   try {
     const d = new Date(dt + 'Z');
     return d.toLocaleDateString('es-AR', { day: 'numeric', month: 'long', year: 'numeric' });
-  } catch { return dt.split('T')[0]; }
+  } catch {
+    return dt.split('T')[0];
+  }
 }
 
-function PromoCard({ promo }: { promo: Promo }) {
-  const color = BANCO_COLORS[promo.banco] || DEFAULT_COLOR;
-  const emoji = MARCA_EMOJI[promo.marca] || '⛽';
+function PromoCard({ promo, onPromoClick }: { promo: Promo; onPromoClick?: () => void }) {
+  const color  = BANCO_COLORS[promo.banco] || DEFAULT_COLOR;
+  const emoji  = MARCA_EMOJI[promo.marca] || '⛽';
+
   return (
-    <div className={`relative rounded-2xl border-2 ${color.border} ${color.bg} p-4 flex flex-col gap-2 shadow-sm hover:shadow-md transition-shadow`}>
+    <div
+      className={`relative rounded-2xl border-2 ${color.border} ${color.bg} p-4 flex flex-col gap-2 shadow-sm hover:shadow-md transition-shadow cursor-pointer`}
+      onClick={onPromoClick}
+    >
+      {/* Header: logo o badge */}
       <div className="flex items-start justify-between gap-2">
         <div>
-          <span className="text-3xl font-extrabold text-gray-800 leading-none">{promo.pct}</span>
+          <span className="text-3xl font-extrabold text-gray-800 leading-none">
+            {promo.pct}
+          </span>
           <span className="ml-1 text-sm text-gray-500 font-medium">reintegro</span>
         </div>
-        <span className={`text-xs font-bold px-2 py-1 rounded-full shrink-0 ${color.badge}`}>{promo.banco}</span>
+        {promo.logo_url ? (
+          <img
+            src={promo.logo_url}
+            alt={promo.banco}
+            className="h-6 w-auto object-contain"
+            onError={(e) => {
+              const img = e.target as HTMLImageElement;
+              img.style.display = 'none';
+              img.nextElementSibling?.classList.remove('hidden');
+            }}
+          />
+        ) : null}
+        <span className={`text-xs font-bold px-2 py-1 rounded-full shrink-0 ${color.badge} ${promo.logo_url ? 'hidden' : ''}`}>
+          {promo.banco}
+        </span>
       </div>
+
+      {/* Detalles */}
       <div className="flex flex-col gap-1 text-sm text-gray-600">
         {promo.dia && (
           <div className="flex items-center gap-1.5">
@@ -73,7 +112,9 @@ function PromoCard({ promo }: { promo: Promo }) {
         )}
         <div className="flex items-center gap-1.5 mt-0.5">
           <span className="text-base leading-none">{emoji}</span>
-          <span className="font-medium text-gray-700">{promo.marca === 'Todas' ? 'Todas las estaciones' : promo.marca}</span>
+          <span className="font-medium text-gray-700">
+            {promo.marca === 'Todas' ? 'Todas las estaciones' : promo.marca}
+          </span>
         </div>
       </div>
     </div>
@@ -86,15 +127,20 @@ export default function PromosSection() {
   const [error, setError]     = useState(false);
 
   const cargar = async () => {
-    setLoading(true); setError(false);
+    setLoading(true);
+    setError(false);
     try {
       const r = await fetch(`${API_BASE}/promos`);
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      setData(await r.json());
+      const json = await r.json();
+      setData(json);
+      trackPromoVista(json.promos?.length ?? 0);
     } catch (e) {
-      console.error('[PromosSection]', e);
+      console.error('[PromosSection] Error:', e);
       setError(true);
-    } finally { setLoading(false); }
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => { cargar(); }, []);
@@ -108,7 +154,9 @@ export default function PromosSection() {
             <h2 className="text-xl font-bold text-gray-800">Promos de combustible</h2>
           </div>
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-            {[...Array(8)].map((_,i) => <div key={i} className="rounded-2xl bg-gray-100 animate-pulse h-28" />)}
+            {[...Array(8)].map((_, i) => (
+              <div key={i} className="rounded-2xl bg-gray-100 animate-pulse h-28" />
+            ))}
           </div>
         </div>
       </section>
@@ -121,7 +169,7 @@ export default function PromosSection() {
         <div className="max-w-5xl mx-auto">
           <div className="flex items-center gap-2 text-amber-700 bg-amber-50 border border-amber-200 rounded-xl p-4">
             <AlertCircle size={18} />
-            <span className="text-sm">No se pudieron cargar las promos. Intentá más tarde.</span>
+            <span className="text-sm">No se pudieron cargar las promos ahora. Intentá más tarde.</span>
             <button onClick={cargar} className="ml-auto flex items-center gap-1 text-xs underline">
               <RefreshCw size={12} /> Reintentar
             </button>
@@ -131,29 +179,49 @@ export default function PromosSection() {
     );
   }
 
+  const scraped = formatScrapedAt(data.scraped_at);
+
   return (
     <section className="py-8 px-4">
       <div className="max-w-5xl mx-auto">
+
+        {/* Header */}
         <div className="flex items-center justify-between mb-5 flex-wrap gap-2">
           <div className="flex items-center gap-3">
             <span className="text-2xl">⛽</span>
             <div>
-              <h2 className="text-xl font-bold text-gray-800 leading-tight">Promos de combustible</h2>
-              {data.scraped_at && (
-                <p className="text-xs text-gray-400 mt-0.5">Actualizado: {formatScrapedAt(data.scraped_at)}</p>
+              <h2 className="text-xl font-bold text-gray-800 leading-tight">
+                Promos de combustible
+              </h2>
+              {scraped && (
+                <p className="text-xs text-gray-400 mt-0.5">
+                  Actualizado: {scraped}
+                </p>
               )}
             </div>
           </div>
-          <button onClick={cargar} className="flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-700 border border-gray-200 rounded-lg px-3 py-1.5 hover:bg-gray-50 transition-colors">
-            <RefreshCw size={12} /> Actualizar
+          <button
+            onClick={cargar}
+            className="flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-700 border border-gray-200 rounded-lg px-3 py-1.5 hover:bg-gray-50 transition-colors"
+          >
+            <RefreshCw size={12} />
+            Actualizar
           </button>
         </div>
+
+        {/* Aviso */}
         <p className="text-xs text-gray-500 mb-4 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
-          💡 Los reintegros se acreditan en tu cuenta o billetera. Verificá condiciones en cada app o banco. Promos sujetas a cambios.
+          💡 Los reintegros se acreditan en tu cuenta bancaria o billetera. Verificá condiciones en cada app o banco. Promos sujetas a cambios.
         </p>
+
+        {/* Grid de promos */}
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-          {data.promos.map((p,i) => <PromoCard key={i} promo={p} />)}
+          {data.promos.map((p, i) => (
+            <PromoCard key={i} promo={p} onPromoClick={() => trackPromoClick({ banco: p.banco, marca: p.marca, pct: p.pct, fuente: 'dashboard' })} />
+          ))}
         </div>
+
+        {/* Footer */}
         <div className="mt-5 flex justify-center">
           <Link
             to="/promos"

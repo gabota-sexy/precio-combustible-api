@@ -1,4 +1,5 @@
-import React, { useMemo, useState, useEffect } from 'react';
+import { trackEstacionClick, trackComoLlegarClick } from '../utils/analytics';
+import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { Station, PRODUCT_MAP, getProductInfo } from '../types';
 import { formatCurrency, getCompanyColorClass } from '../utils/api';
@@ -220,6 +221,18 @@ export function StationList({
       return freshDate(b) - freshDate(a); // Más reciente primero
     });
   }, [grouped, productFilter, searchQuery, sortBy, hasDistances, soloRecientes, freshCount]);
+  // ── Paginación ──────────────────────────────────────────────────────
+  const PAGE_SIZE = 20;
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+
+  // Reset pagination when filters/search/sort changes
+  useEffect(() => {
+    setVisibleCount(PAGE_SIZE);
+  }, [productFilter, searchQuery, sortBy, soloRecientes, data]);
+
+  const visibleStations = filtered.slice(0, visibleCount);
+  // ─────────────────────────────────────────────────────────────────────
+
   const isCabaNoBarrio =
     filters?.provincia &&
     (filters.provincia.toUpperCase().includes('CIUDAD AUTÓNOMA') ||
@@ -328,7 +341,7 @@ export function StationList({
 
       {/* Station cards */}
       <div className="space-y-3 max-h-[550px] overflow-y-auto pr-1" style={{ scrollbarWidth: 'thin', scrollbarColor: '#334155 transparent' } as React.CSSProperties}>
-        {filtered.map((station, idx) =>
+        {visibleStations.map((station, idx) =>
         <StationCard
           key={`${station.empresa}-${station.direccion}-${idx}`}
           station={station}
@@ -345,6 +358,26 @@ export function StationList({
             </p>
           </div>
         }
+        {/* Cargar más */}
+        {visibleCount < filtered.length && (
+          <button
+            onClick={() => setVisibleCount(v => v + PAGE_SIZE)}
+            style={{
+              width: '100%',
+              padding: '10px',
+              background: 'transparent',
+              border: '1px solid #334155',
+              borderRadius: '8px',
+              color: '#94a3b8',
+              cursor: 'pointer',
+              fontSize: '13px',
+              marginTop: '8px',
+            }}
+          >
+            Cargar {Math.min(PAGE_SIZE, filtered.length - visibleCount)} estaciones más
+            ({filtered.length - visibleCount} restantes)
+          </button>
+        )}
       </div>
     </div>);
 
@@ -398,6 +431,13 @@ function StationCard({
   station.empresa === selectedStation.empresa &&
   station.direccion === selectedStation.direccion :
   false;
+  // Scroll this card into view when selected (e.g. via map pin click)
+  const cardRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (isSelected && cardRef.current) {
+      cardRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  }, [isSelected]);
   const handleClick = () => {
     // Find the matching raw Station record
     const raw = data.find(
@@ -407,6 +447,7 @@ function StationCard({
       s.producto === displayProduct.producto
     );
     if (raw && onStationClick) onStationClick(raw);
+    trackEstacionClick({ bandera: station.empresa, precio: displayProduct.precio ?? undefined, producto: displayProduct.producto, provincia: station.provincia, fuente: 'lista' });
   };
   const handleProductClick = (e: React.MouseEvent, pIdx: number) => {
     e.stopPropagation();
@@ -423,6 +464,7 @@ function StationCard({
   };
   return (
     <motion.div
+      ref={cardRef}
       initial={{
         opacity: 0,
         y: 20
@@ -525,7 +567,7 @@ function StationCard({
             }
             target="_blank"
             rel="noopener noreferrer"
-            onClick={(e) => e.stopPropagation()}
+            onClick={(e) => { e.stopPropagation(); trackComoLlegarClick(station.empresa); }}
             title="Cómo llegar"
             className="p-1.5 rounded-md text-slate-600 hover:text-emerald-400 hover:bg-slate-800 transition-colors">
             <NavigationIcon className="w-4 h-4" />
